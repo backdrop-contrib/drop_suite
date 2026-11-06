@@ -1066,6 +1066,14 @@ class DropCrmClientsReportTest extends DropCrmTestBase {
     $this->backdropGet('drop/crm/contact/' . $sub->cid);
     $this->assertText('Via agency', 'The contact page shows the field with its label.');
     $this->assertLink('Agency Partner', 0, 'The contact page links to the organization.');
+
+    $this->backdropGet('drop/crm/contact/' . $agency->cid);
+    $this->assertText('Sub-clients', 'The organization page has a Sub-clients section.');
+    $this->assertLinkByHref('drop/crm/contact/' . $sub->cid, 0, 'It links to the sub-client.');
+    $this->assertRaw('<strong>Via agency</strong> field is set to this organization', 'The section help uses the field label.');
+
+    $this->backdropGet('drop/crm/contact/' . $this->cids['Hot Client']);
+    $this->assertNoText('Sub-clients', 'Organizations without sub-clients have no Sub-clients section.');
   }
 
   /**

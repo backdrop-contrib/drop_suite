@@ -119,6 +119,36 @@ function drop_crm_contact_view(CrmContact $contact) {
     );
   }
 
+  // --- Sub-clients: contacts whose "Through" field points here ---
+  if ($contact->bundle() === 'crm_organization') {
+    $through = _drop_crm_load_through_contacts($contact->cid);
+    if ($through) {
+      $instance = field_info_instance('crm_contact', 'field_crm_client_via', 'crm_organization');
+      $through_label = $instance ? $instance['label'] : t('Through');
+      $through_rows = array();
+      foreach ($through as $client) {
+        $through_rows[] = array(
+          l(entity_label('crm_contact', $client), 'drop/crm/contact/' . $client->cid),
+        );
+      }
+      $output['through_contacts'] = array(
+        '#weight' => isset($display['through_contacts']['weight']) ? $display['through_contacts']['weight'] : 6,
+        '#access' => !isset($display['through_contacts']) || $display['through_contacts']['visible'],
+        '#prefix' => drop_crm_accordion_prefix(t('Sub-clients'), '', TRUE),
+        '#suffix' => drop_crm_accordion_suffix(),
+        'help'    => array(
+          '#markup' => '<p class="crm-section-help">' . t('Contacts whose <strong>@label</strong> field is set to this organization.', array('@label' => $through_label)) . '</p>',
+          '#weight' => -1,
+        ),
+        'table'   => array(
+          '#theme'  => 'table',
+          '#header' => array(t('Name')),
+          '#rows'   => $through_rows,
+        ),
+      );
+    }
+  }
+
   // --- Field API fields (custom fields added via UI) ---
   // For person contacts, the hero renders specific fields manually.
   // Render remaining Field API fields so custom fields are visible.
@@ -916,6 +946,30 @@ function _drop_crm_load_org_contacts($cid) {
     return array();
   }
 
+  return crm_contact_load_multiple(array_keys($result['crm_contact']));
+}
+
+/**
+ * Loads contacts whose "Through" field points to an organization.
+ *
+ * @param int $cid
+ *   The organization's contact ID.
+ *
+ * @return array
+ *   Contact entities keyed by cid, sorted by name.
+ */
+function _drop_crm_load_through_contacts($cid) {
+  if (!field_info_field('field_crm_client_via')) {
+    return array();
+  }
+  $query = new EntityFieldQuery();
+  $query->entityCondition('entity_type', 'crm_contact')
+    ->fieldCondition('field_crm_client_via', 'target_id', $cid)
+    ->propertyOrderBy('name', 'ASC');
+  $result = $query->execute();
+  if (empty($result['crm_contact'])) {
+    return array();
+  }
   return crm_contact_load_multiple(array_keys($result['crm_contact']));
 }
 

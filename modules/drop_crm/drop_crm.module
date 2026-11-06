@@ -262,6 +262,11 @@ function drop_crm_field_extra_fields() {
     'description' => t('People who list this organization as their employer.'),
     'weight' => 5,
   );
+  $extra['crm_contact']['crm_organization']['display']['through_contacts'] = array(
+    'label' => t('Sub-clients'),
+    'description' => t('Contacts whose Through field points to this organization. Shown only when there are some.'),
+    'weight' => 6,
+  );
 
   // Household display fields.
   $extra['crm_contact']['crm_household']['display'] = $shared_display;
