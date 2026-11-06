@@ -952,7 +952,7 @@ class DropCrmClientsReportTest extends DropCrmTestBase {
   public static function getInfo() {
     return array(
       'name'        => 'Drop CRM Clients report',
-      'description' => 'The Clients report view lists active Client-tagged contacts, ranks warmth, sorts by last updated, and flags stale contacts.',
+      'description' => 'The Clients report view lists active contacts whose Contact type is Client, ranks warmth, sorts by last updated, and flags stale contacts.',
       'group'       => 'Drop CRM',
     );
   }
@@ -962,10 +962,10 @@ class DropCrmClientsReportTest extends DropCrmTestBase {
     $this->crmUser = $this->backdropCreateUser(array('access crm'));
     config_set('drop_crm.settings', 'client_stale_days', 30);
 
-    $client = $this->tagTid('Client');
-    $partner = $this->tagTid('Partner');
+    $client = $this->typeTid('Client');
+    $partner = $this->typeTid('Partner');
     $day = 86400;
-    // name => array(tags, warmth, days since saved, active, status note).
+    // name => array(contact types, warmth, days since saved, active, status note).
     // "Apex Hot Client" is saved after "Hot Client" so that name order and
     // insertion order differ.
     $contacts = array(
@@ -976,6 +976,7 @@ class DropCrmClientsReportTest extends DropCrmTestBase {
       'Partner Only'     => array(array($partner), 'hot', 1, 1, ''),
       'Inactive Client'  => array(array($client), 'hot', 1, 0, ''),
       'Apex Hot Client'  => array(array($client), 'hot', 5, 1, ''),
+      'Tagged Prospect'  => array(array($this->typeTid('Prospect')), 'hot', 1, 1, ''),
     );
     foreach ($contacts as $name => $info) {
       list($tids, $warmth, $age, $active, $status) = $info;
@@ -985,7 +986,11 @@ class DropCrmClientsReportTest extends DropCrmTestBase {
         'status' => $active,
       ));
       foreach ($tids as $delta => $tid) {
-        $org->field_drop_tags[LANGUAGE_NONE][$delta]['tid'] = $tid;
+        $org->field_contact_type[LANGUAGE_NONE][$delta]['tid'] = $tid;
+      }
+      // A Client tag alone no longer puts a contact on the report.
+      if ($name === 'Tagged Prospect') {
+        $org->field_drop_tags[LANGUAGE_NONE][0]['tid'] = $this->tagTid('Client');
       }
       if ($warmth) {
         $org->field_crm_warmth[LANGUAGE_NONE][0]['value'] = $warmth;
@@ -1007,7 +1012,7 @@ class DropCrmClientsReportTest extends DropCrmTestBase {
     $this->backdropLogin($this->crmUser);
     $this->backdropGet('drop/crm/reports/clients');
     $this->assertResponse(200, 'Clients report loads.');
-    $this->assertEqual($this->clientOrder(), array('Apex Hot Client', 'Hot Client', 'Warm Client', 'Cold Client', 'Unset Client'), 'Hot, Warm, Cold, then unset, by name within each; inactive and non-client contacts are left out, and a contact with two tags appears once.');
+    $this->assertEqual($this->clientOrder(), array('Apex Hot Client', 'Hot Client', 'Warm Client', 'Cold Client', 'Unset Client'), 'Hot, Warm, Cold, then unset, by name within each; inactive contacts, non-clients and Client-tagged prospects are left out, and a contact with two contact types appears once.');
 
     $this->assertLinkByHref('drop/crm/contacts/' . $this->cids['Hot Client'] . '/edit', 0, 'Names link to the edit form.');
     $this->assertText('5 clients — 2 not updated in the last 30 days.', 'Summary counts clients and stale clients.');
@@ -1052,12 +1057,26 @@ class DropCrmClientsReportTest extends DropCrmTestBase {
   }
 
   /**
+   * The tid of a contact_types term, created if missing.
+   */
+  protected function typeTid($name) {
+    return $this->termTid('contact_types', $name);
+  }
+
+  /**
    * The tid of a drop_tags term, created if missing.
    */
   protected function tagTid($name) {
-    $tid = db_query("SELECT tid FROM {taxonomy_term_data} WHERE vocabulary = 'drop_tags' AND name = :name", array(':name' => $name))->fetchField();
+    return $this->termTid('drop_tags', $name);
+  }
+
+  /**
+   * The tid of a term in $vocabulary, created if missing.
+   */
+  protected function termTid($vocabulary, $name) {
+    $tid = db_query("SELECT tid FROM {taxonomy_term_data} WHERE vocabulary = :vocabulary AND name = :name", array(':vocabulary' => $vocabulary, ':name' => $name))->fetchField();
     if (!$tid) {
-      $term = entity_create('taxonomy_term', array('vocabulary' => 'drop_tags', 'name' => $name, 'parent' => array(0)));
+      $term = entity_create('taxonomy_term', array('vocabulary' => $vocabulary, 'name' => $name, 'parent' => array(0)));
       taxonomy_term_save($term);
       $tid = $term->tid;
     }

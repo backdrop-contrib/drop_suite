@@ -2140,3 +2140,34 @@ function drop_crm_update_1035() {
   menu_rebuild();
   return t('The Clients report is now the crm_clients view.');
 }
+
+/**
+ * Clients report: list contacts whose Contact type is Client, not the Client tag.
+ */
+function drop_crm_update_1036() {
+  $config = config('views.view.crm_clients');
+  if ($config->isNew()) {
+    return t('No Clients report view found; nothing to change.');
+  }
+  $options = $config->get('display.default.display_options');
+  $relationships = isset($options['relationships']) ? $options['relationships'] : array();
+  $filter = isset($options['filters']['name']) ? $options['filters']['name'] : array();
+  if (!isset($relationships['field_drop_tags_tid']) || ($filter['relationship'] ?? '') !== 'field_drop_tags_tid') {
+    return t('The Clients report does not use the Client tag filter (already updated or customized); left unchanged.');
+  }
+
+  unset($relationships['field_drop_tags_tid']);
+  $relationships['field_contact_type_tid'] = array(
+    'id' => 'field_contact_type_tid',
+    'table' => 'field_data_field_contact_type',
+    'field' => 'field_contact_type_tid',
+    'label' => 'Contact type',
+    'required' => TRUE,
+  );
+  $options['relationships'] = $relationships;
+  $options['filters']['name']['relationship'] = 'field_contact_type_tid';
+  $config->set('display.default.display_options', $options);
+  $config->save();
+  views_invalidate_cache();
+  return t('The Clients report now lists contacts whose Contact type is Client.');
+}
