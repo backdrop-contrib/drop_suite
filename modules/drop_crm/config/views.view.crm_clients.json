@@ -32,6 +32,7 @@
                     "columns": {
                         "name": "name",
                         "type": "type",
+                        "field_crm_client_via": "field_crm_client_via",
                         "field_crm_warmth": "field_crm_warmth",
                         "field_crm_status": "field_crm_status",
                         "last_updated": "last_updated"
@@ -48,6 +49,13 @@
                             "empty_column": false
                         },
                         "type": {
+                            "sortable": false,
+                            "default_sort_order": "asc",
+                            "align": "",
+                            "separator": "",
+                            "empty_column": false
+                        },
+                        "field_crm_client_via": {
                             "sortable": false,
                             "default_sort_order": "asc",
                             "align": "",
@@ -112,6 +120,18 @@
                         "field": "type",
                         "label": "Type",
                         "machine_name": false
+                    },
+                    "field_crm_client_via": {
+                        "id": "field_crm_client_via",
+                        "table": "field_data_field_crm_client_via",
+                        "field": "field_crm_client_via",
+                        "label": "Through",
+                        "element_class": "drop_crm-col-through",
+                        "type": "entityreference_label",
+                        "settings": {
+                            "link": 1
+                        },
+                        "empty": ""
                     },
                     "field_crm_warmth": {
                         "id": "field_crm_warmth",

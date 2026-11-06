@@ -1037,6 +1037,46 @@ class DropCrmClientsReportTest extends DropCrmTestBase {
   }
 
   /**
+   * Sub-clients show the organization they come through; the heading follows
+   * the field label.
+   */
+  public function testThroughColumn() {
+    $agency = entity_create('crm_contact', array('type' => 'crm_organization', 'name' => 'Agency Partner', 'status' => 1));
+    $agency->field_contact_type[LANGUAGE_NONE][0]['tid'] = $this->typeTid('Partner');
+    $agency->save();
+    $sub = entity_create('crm_contact', array('type' => 'crm_organization', 'name' => 'Sub Client', 'status' => 1));
+    $sub->field_contact_type[LANGUAGE_NONE][0]['tid'] = $this->typeTid('Client');
+    $sub->field_crm_client_via[LANGUAGE_NONE][0]['target_id'] = $agency->cid;
+    $sub->save();
+
+    $this->backdropLogin($this->crmUser);
+    $this->backdropGet('drop/crm/reports/clients');
+    $this->assertTrue(in_array('Sub Client', $this->clientOrder()), 'A sub-client with Contact type Client is listed.');
+    $this->assertFalse(in_array('Agency Partner', $this->clientOrder()), 'The organization it comes through is not listed unless it is a client too.');
+    $this->assertEqual(count($this->xpath('//table[contains(@class, "drop_crm-clients-table")]//th[contains(@class, "views-field-field-crm-client-via") and normalize-space(.)="Through"]')), 1, 'The column heading defaults to "Through".');
+    $this->assertEqual($this->throughCell('Sub Client'), 'Agency Partner', 'The sub-client row names the organization it comes through.');
+    $this->assertEqual($this->throughCell('Hot Client'), '', 'Direct clients have an empty Through cell.');
+
+    $instance = field_read_instance('crm_contact', 'field_crm_client_via', 'crm_organization');
+    $instance['label'] = 'Via agency';
+    field_update_instance($instance);
+    $this->backdropGet('drop/crm/reports/clients');
+    $this->assertEqual(count($this->xpath('//th[contains(@class, "views-field-field-crm-client-via") and normalize-space(.)="Via agency"]')), 1, 'The heading follows the label set in Manage fields.');
+
+    $this->backdropGet('drop/crm/contact/' . $sub->cid);
+    $this->assertText('Via agency', 'The contact page shows the field with its label.');
+    $this->assertLink('Agency Partner', 0, 'The contact page links to the organization.');
+  }
+
+  /**
+   * Text of the Through cell in the row for $name.
+   */
+  protected function throughCell($name) {
+    $cells = $this->xpath('//table[contains(@class, "drop_crm-clients-table")]//tbody/tr[td[contains(@class, "views-field-name")]//a[normalize-space(.)="' . $name . '"]]/td[contains(@class, "views-field-field-crm-client-via")]');
+    return $cells ? trim(strip_tags($cells[0]->asXML())) : NULL;
+  }
+
+  /**
    * Without CRM access the report is denied.
    */
   public function testAccess() {

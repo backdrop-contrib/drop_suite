@@ -1454,7 +1454,9 @@ function drop_crm_views_api() {
 /**
  * Implements hook_views_pre_render().
  *
- * Replaces NULL activity_date values with 0 in the crm_last_contact view
+ * On the Clients report, adds its CSS and sets the Through column heading.
+ *
+ * On crm_last_contact, replaces NULL activity_date values with 0 in the crm_last_contact view
  * before the field handler runs. The date handler in core
  * (views_handler_field_date::render()) calls strtotime() on non-numeric
  * values; passing NULL triggers a PHP 8 deprecation. is_numeric(0) is TRUE,
@@ -1465,6 +1467,14 @@ function drop_crm_views_api() {
 function drop_crm_views_pre_render(&$view) {
   if ($view->name === 'crm_clients') {
     backdrop_add_css(backdrop_get_path('module', 'drop_crm') . '/drop_crm.admin.css');
+    // The "Through" column takes its heading from the field's label (set in
+    // Manage fields), unless the heading was changed in the view itself.
+    if (isset($view->field['field_crm_client_via']) && $view->field['field_crm_client_via']->options['label'] === 'Through') {
+      $instance = field_info_instance('crm_contact', 'field_crm_client_via', 'crm_organization');
+      if ($instance && $instance['label'] !== '') {
+        $view->field['field_crm_client_via']->options['label'] = $instance['label'];
+      }
+    }
     return;
   }
   if ($view->name !== 'crm_last_contact') {

@@ -324,6 +324,7 @@ function drop_crm_install() {
   _drop_crm_ensure_contact_tags();
   _drop_crm_ensure_contact_types();
   _drop_crm_ensure_contact_groups();
+  _drop_crm_ensure_client_through();
 
   module_load_include('inc', 'drop_crm', 'drop_crm.admin');
   $config = config('drop_crm.settings');
@@ -613,6 +614,55 @@ function _drop_crm_ensure_contact_types() {
         'parent'     => array(0),
       ));
       taxonomy_term_save($term);
+    }
+  }
+}
+
+/**
+ * Ensures the "Through" field: the organization a client comes to us through.
+ *
+ * Used for sub-clients, e.g. a client of an agency we work for. The field is
+ * on all contact bundles and points at an organization. Its label is set in
+ * Manage fields; the Clients report column follows the organization label.
+ */
+function _drop_crm_ensure_client_through() {
+  if (!field_info_field('field_crm_client_via')) {
+    field_create_field(array(
+      'field_name'  => 'field_crm_client_via',
+      'type'        => 'entityreference',
+      'cardinality' => 1,
+      'settings'    => array(
+        'target_type'      => 'crm_contact',
+        'handler'          => 'base',
+        'handler_settings' => array(
+          'target_bundles' => array('crm_organization' => 'crm_organization'),
+          'sort'           => array('type' => 'none'),
+        ),
+      ),
+    ));
+  }
+  foreach (array('crm_organization', 'crm_person', 'crm_household') as $bundle) {
+    if (!field_info_instance('crm_contact', 'field_crm_client_via', $bundle)) {
+      field_create_instance(array(
+        'field_name'  => 'field_crm_client_via',
+        'entity_type' => 'crm_contact',
+        'bundle'      => $bundle,
+        'label'       => 'Through',
+        'required'    => FALSE,
+        'description' => 'If this is a client of an organization you work for (a sub-client), pick that organization.',
+        'widget'      => array(
+          'type'     => 'entityreference_autocomplete',
+          'settings' => array('path' => 'crm/autocomplete/organizations'),
+        ),
+        'display' => array(
+          'default' => array(
+            'label'    => 'inline',
+            'type'     => 'entityreference_label',
+            'settings' => array('link' => TRUE),
+            'weight'   => 5,
+          ),
+        ),
+      ));
     }
   }
 }
@@ -2170,4 +2220,60 @@ function drop_crm_update_1036() {
   $config->save();
   views_invalidate_cache();
   return t('The Clients report now lists contacts whose Contact type is Client.');
+}
+
+/**
+ * Adds the "Through" field for sub-clients and shows it on the Clients report.
+ */
+function drop_crm_update_1037() {
+  _drop_crm_ensure_client_through();
+
+  $config = config('views.view.crm_clients');
+  if ($config->isNew()) {
+    return t('Added the Through field. No Clients report view found to update.');
+  }
+  $options = $config->get('display.default.display_options');
+  if (isset($options['fields']['field_crm_client_via'])) {
+    return t('Added the Through field. The Clients report already shows it.');
+  }
+  $column = _drop_crm_client_through_view_field();
+  $fields = array();
+  foreach ($options['fields'] as $id => $field) {
+    $fields[$id] = $field;
+    if ($id === 'type') {
+      $fields['field_crm_client_via'] = $column;
+    }
+  }
+  if (!isset($fields['field_crm_client_via'])) {
+    $fields['field_crm_client_via'] = $column;
+  }
+  $options['fields'] = $fields;
+  $options['style_options']['columns']['field_crm_client_via'] = 'field_crm_client_via';
+  $options['style_options']['info']['field_crm_client_via'] = array(
+    'sortable' => FALSE,
+    'default_sort_order' => 'asc',
+    'align' => '',
+    'separator' => '',
+    'empty_column' => FALSE,
+  );
+  $config->set('display.default.display_options', $options);
+  $config->save();
+  views_invalidate_cache();
+  return t('Added the Through field and a Through column on the Clients report.');
+}
+
+/**
+ * The Clients report column for the "Through" field, as stored in the view.
+ */
+function _drop_crm_client_through_view_field() {
+  return array(
+    'id' => 'field_crm_client_via',
+    'table' => 'field_data_field_crm_client_via',
+    'field' => 'field_crm_client_via',
+    'label' => 'Through',
+    'element_class' => 'drop_crm-col-through',
+    'type' => 'entityreference_label',
+    'settings' => array('link' => 1),
+    'empty' => '',
+  );
 }
