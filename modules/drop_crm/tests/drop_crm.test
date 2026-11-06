@@ -137,6 +137,36 @@ class DropCrmContactCRUDTest extends DropCrmTestBase {
   }
 
   /**
+   * Organizations have no Relationships section unless they already have
+   * relationships; people always do.
+   */
+  public function testRelationshipsSectionOnlyWhereUseful() {
+    $org = $this->createTestOrg('No Rel Org');
+    $legacy_org = $this->createTestOrg('Legacy Rel Org');
+    $person = $this->createTestPerson('Rel', 'Person');
+    db_insert('crm_relationship')->fields(array(
+      'cid_a' => $legacy_org->cid,
+      'cid_b' => $person->cid,
+      'type' => 'colleague',
+      'notes' => '',
+      'created' => REQUEST_TIME,
+    ))->execute();
+    $section = '//span[contains(@class, "crm-section-title") and normalize-space(.)="Relationships"]';
+
+    $this->backdropLogin($this->crmUser);
+    $this->backdropGet('drop/crm/contact/' . $org->cid);
+    $this->assertEqual(count($this->xpath($section)), 0, 'An organization without relationships has no Relationships section.');
+    $this->assertText('Affiliated People', 'Other organization sections still show.');
+
+    $this->backdropGet('drop/crm/contact/' . $legacy_org->cid);
+    $this->assertEqual(count($this->xpath($section)), 1, 'An organization that already has relationships still shows them.');
+    $this->assertLink('Rel Person', 0, 'The existing relationship is listed.');
+
+    $this->backdropGet('drop/crm/contact/' . $this->createTestPerson('Solo', 'Person')->cid);
+    $this->assertEqual(count($this->xpath($section)), 1, 'People always have a Relationships section.');
+  }
+
+  /**
    * A person contact's display name is computed from first + last name fields.
    */
   public function testPersonNameComputedFromFields() {

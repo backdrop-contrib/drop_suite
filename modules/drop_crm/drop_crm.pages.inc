@@ -235,7 +235,11 @@ function drop_crm_contact_view(CrmContact $contact) {
 
   // --- Relationships ---
   // Relationships link two people (family, colleagues, etc.).
-  // Organizations use "Affiliated People" (via the Employer field) instead.
+  // Organizations use "Affiliated People" (via the Employer field) instead,
+  // so they get no Relationships section unless they already have some
+  // (e.g. imported data from before the people-only rule).
+  $relationships = _drop_crm_load_contact_relationships($contact->cid);
+  $show_relationships = $contact->bundle() !== 'crm_organization' || !empty($relationships);
   $rel_add_link = '';
   if ($contact->bundle() !== 'crm_organization') {
     $rel_add_link = l(t('+ Add relationship'), 'drop/crm/relationships/add',
@@ -244,7 +248,7 @@ function drop_crm_contact_view(CrmContact $contact) {
   }
   $output['relationships'] = array(
     '#weight' => isset($display['relationships']['weight']) ? $display['relationships']['weight'] : 15,
-    '#access' => !isset($display['relationships']) || $display['relationships']['visible'],
+    '#access' => $show_relationships && (!isset($display['relationships']) || $display['relationships']['visible']),
     '#prefix' => drop_crm_accordion_prefix(t('Relationships'), $rel_add_link),
     '#suffix' => drop_crm_accordion_suffix(),
     'help'    => array(
@@ -252,7 +256,6 @@ function drop_crm_contact_view(CrmContact $contact) {
       '#weight' => -1,
     ),
   );
-  $relationships  = _drop_crm_load_contact_relationships($contact->cid);
   $type_options   = _drop_crm_relationship_type_options();
   $rel_rows = array();
   foreach ($relationships as $rel) {
