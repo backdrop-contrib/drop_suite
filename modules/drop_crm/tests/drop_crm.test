@@ -305,6 +305,31 @@ class DropCrmContactCRUDTest extends DropCrmTestBase {
   }
 
   /**
+   * The Organizations list shows each organization's contact types.
+   */
+  public function testContactTypeColumnOnOrgList() {
+    $tids = array();
+    foreach (array('Client', 'Partner') as $name) {
+      $terms = taxonomy_term_load_multiple(array(), array('name' => $name, 'vocabulary' => 'contact_types'));
+      $tids[$name] = key($terms);
+    }
+    $org = $this->createTestOrg('Typed Org');
+    $org->field_contact_type[LANGUAGE_NONE] = array(array('tid' => $tids['Client']), array('tid' => $tids['Partner']));
+    $org->save();
+    $this->createTestOrg('Untyped Org');
+
+    $this->backdropLogin($this->crmUser);
+    $this->backdropGet('drop/crm/organizations');
+    $this->assertEqual(count($this->xpath('//th[contains(@class, "views-field-field-contact-type") and normalize-space(.)="Contact type"]')), 1, 'The list has a Contact type column.');
+    $cells = $this->xpath('//tr[td//a[normalize-space(.)="Typed Org"]]/td[contains(@class, "views-field-field-contact-type")]');
+    $this->assertEqual($cells ? trim(strip_tags($cells[0]->asXML())) : NULL, 'Client, Partner', 'All of an organization\'s contact types are shown in one row.');
+    $this->assertEqual(count($this->xpath('//tr[td//a[normalize-space(.)="Typed Org"]]')), 1, 'An organization with two contact types is listed once.');
+
+    $this->backdropGet('drop/crm/people');
+    $this->assertEqual(count($this->xpath('//th[contains(@class, "views-field-field-contact-type")]')), 0, 'The People list is unchanged.');
+  }
+
+  /**
    * The Households list page shows an Add Household action link.
    */
   public function testAddHouseholdActionLinkOnHouseholdList() {
