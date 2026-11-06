@@ -78,11 +78,11 @@
                     }
                 },
                 "relationships": {
-                    "field_drop_tags_tid": {
-                        "id": "field_drop_tags_tid",
-                        "table": "field_data_field_drop_tags",
-                        "field": "field_drop_tags_tid",
-                        "label": "Tag",
+                    "field_contact_type_tid": {
+                        "id": "field_contact_type_tid",
+                        "table": "field_data_field_contact_type",
+                        "field": "field_contact_type_tid",
+                        "label": "Contact type",
                         "required": true
                     }
                 },
@@ -161,7 +161,7 @@
                         "id": "name",
                         "table": "taxonomy_term_data",
                         "field": "name",
-                        "relationship": "field_drop_tags_tid",
+                        "relationship": "field_contact_type_tid",
                         "operator": "=",
                         "value": "Client",
                         "case": false
