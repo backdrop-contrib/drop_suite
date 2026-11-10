@@ -15,3 +15,9 @@ name = Drop Docs Display Name
 description = Verifies the display_name config changes nav, empty state, and sidebar heading.
 group = Drop Docs
 file = drop_docs.test
+
+[DropDocsDefaultBookTest]
+name = Drop Docs Default Book
+description = Verifies install creates a default book and docs saved without a book are placed in it.
+group = Drop Docs
+file = drop_docs.test

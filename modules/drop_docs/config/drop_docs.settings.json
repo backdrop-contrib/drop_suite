@@ -1,4 +1,5 @@
 {
     "_config_name": "drop_docs.settings",
-    "display_name": "Docs"
+    "display_name": "Docs",
+    "default_book": 0
 }

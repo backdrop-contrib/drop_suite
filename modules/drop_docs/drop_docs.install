@@ -86,6 +86,56 @@ function drop_docs_install() {
   // Site architects can revoke this on the permissions page if they want
   // tighter access.
   user_role_grant_permissions('authenticated', array('view drop docs book content'));
+
+  // Create the "Documentation" book that new docs go into by default.
+  _drop_docs_ensure_default_book();
+}
+
+/**
+ * Helper: make sure a default book for new docs exists and is configured.
+ *
+ * Keeps a valid existing setting. Otherwise picks the published doc book with
+ * the most pages, or creates a published "Documentation" book if there is no
+ * doc book yet. Idempotent and safe to call from hook_install and update
+ * hooks.
+ *
+ * @return string
+ *   A message describing what was done.
+ */
+function _drop_docs_ensure_default_book() {
+  $default = drop_docs_default_book();
+  if ($default) {
+    return t('Drop Docs: default book already set (node @nid).', array('@nid' => $default['bid']));
+  }
+
+  $bid = db_query_range("
+    SELECT b.bid
+    FROM {book} b
+    INNER JOIN {node} n ON n.nid = b.bid
+    WHERE n.type = 'doc' AND n.status = 1
+    GROUP BY b.bid
+    ORDER BY COUNT(b.nid) DESC, b.bid ASC
+  ", 0, 1)->fetchField();
+
+  if ($bid) {
+    $message = t('Drop Docs: set the existing book (node @nid) as the default book for new docs.', array('@nid' => $bid));
+  }
+  else {
+    $root = new Node();
+    $root->type = 'doc';
+    $root->title = t('Documentation');
+    $root->language = LANGUAGE_NONE;
+    $root->uid = 1;
+    $root->status = 1;
+    $root->book = _book_link_defaults('new');
+    $root->book['bid'] = 'new';
+    node_save($root);
+    $bid = $root->book['bid'];
+    $message = t('Drop Docs: created a "Documentation" book (node @nid) as the default book for new docs.', array('@nid' => $bid));
+  }
+
+  config_set('drop_docs.settings', 'default_book', (int) $bid);
+  return $message;
 }
 
 /**
@@ -284,6 +334,17 @@ function drop_docs_update_1005() {
   }
 
   return t('Drop Docs: promoted @n orphan doc(s) to their own books.', array('@n' => $count));
+}
+
+/**
+ * Set a default book for new docs.
+ *
+ * Uses the published doc book with the most pages, or creates a
+ * "Documentation" book if the site has none. Docs saved without a book now go
+ * into this book instead of becoming books of their own.
+ */
+function drop_docs_update_1006() {
+  return _drop_docs_ensure_default_book();
 }
 
 /**
