@@ -141,7 +141,10 @@
                 "title": "Organizations",
                 "defaults": {
                     "title": false,
-                    "filters": false
+                    "filters": false,
+                    "fields": false,
+                    "style_plugin": false,
+                    "style_options": false
                 },
                 "filters": {
                     "type": {
@@ -155,6 +158,77 @@
                 },
                 "menu": {
                     "type": "none"
+                },
+                "fields": {
+                    "name": {
+                        "id": "name",
+                        "table": "crm_contact",
+                        "field": "name",
+                        "label": "Name",
+                        "link_to_entity": true
+                    },
+                    "field_contact_type": {
+                        "id": "field_contact_type",
+                        "table": "field_data_field_contact_type",
+                        "field": "field_contact_type",
+                        "label": "Contact type",
+                        "type": "taxonomy_term_reference_plain",
+                        "group_rows": true,
+                        "delta_offset": 0,
+                        "multi_type": "separator",
+                        "separator": ", ",
+                        "empty": "\u2014"
+                    },
+                    "status": {
+                        "id": "status",
+                        "table": "crm_contact",
+                        "field": "status",
+                        "label": "Status",
+                        "type": "custom",
+                        "type_custom_true": "Active",
+                        "type_custom_false": "Inactive",
+                        "not": false
+                    },
+                    "cid": {
+                        "id": "cid",
+                        "table": "crm_contact",
+                        "field": "cid",
+                        "label": "Actions",
+                        "separator": "",
+                        "alter": {
+                            "alter_text": true,
+                            "text": "<a href=\"/drop/crm/contacts/[cid]/edit\">Edit</a> \u00b7 <a href=\"/drop/crm/contacts/[cid]/delete\">Delete</a>"
+                        }
+                    }
+                },
+                "style_plugin": "table",
+                "style_options": {
+                    "columns": {
+                        "name": "name",
+                        "field_contact_type": "field_contact_type",
+                        "status": "status"
+                    },
+                    "default": "name",
+                    "info": {
+                        "name": {
+                            "sortable": true,
+                            "default_sort_order": "asc",
+                            "align": "",
+                            "separator": ""
+                        },
+                        "field_contact_type": {
+                            "sortable": false,
+                            "default_sort_order": "asc",
+                            "align": "",
+                            "separator": ""
+                        },
+                        "status": {
+                            "sortable": true,
+                            "default_sort_order": "desc",
+                            "align": "",
+                            "separator": ""
+                        }
+                    }
                 }
             }
         },
