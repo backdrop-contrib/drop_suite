@@ -123,12 +123,58 @@ function drop_docs_permission() {
  * bypass permissions elsewhere for non-view ops.
  */
 /**
+ * Returns the top page of the default book for new docs.
+ *
+ * @return array|false
+ *   The {book} row (nid, mlid, bid) of the default book's top page, or FALSE
+ *   if no default book is set or the stored one is no longer a book.
+ */
+function drop_docs_default_book() {
+  $bid = (int) config_get('drop_docs.settings', 'default_book');
+  if (!$bid) {
+    return FALSE;
+  }
+  $root = db_query(
+    "SELECT nid, mlid, bid FROM {book} WHERE nid = :nid AND bid = :nid",
+    array(':nid' => $bid)
+  )->fetchAssoc();
+  return $root ? $root : FALSE;
+}
+
+/**
+ * Implements hook_node_prepare().
+ *
+ * Pre-selects the default book in the book outline on the add form for new
+ * docs, so people can see where the doc will go and pick another book if they
+ * want. Runs after book_node_prepare(), which only builds $node->book for
+ * people allowed to use the book outline; others are handled at presave.
+ */
+function drop_docs_node_prepare(Node $node) {
+  if ($node->type !== 'doc' || !empty($node->nid)) {
+    return;
+  }
+  // No outline form for this person, or "Add child page" already chose a book.
+  if (!isset($node->book) || !is_array($node->book) || !empty($node->book['bid'])) {
+    return;
+  }
+  $default = drop_docs_default_book();
+  if (!$default) {
+    return;
+  }
+  $node->book['bid'] = $default['bid'];
+  $node->book['plid'] = $default['mlid'];
+  $node->book['menu_name'] = book_menu_name($default['bid']);
+}
+
+/**
  * Implements hook_node_presave().
  *
- * Auto-assigns doc nodes to a new book outline if the caller didn't place them
- * in one. Orphan docs don't show on /drop/docs because the index only lists
- * book-rooted docs. Runs before book_node_insert/book_node_update, which pick
- * up the bid and create the menu link.
+ * Places docs that were saved without a book into the default book, as
+ * top-level pages. If no default book is set, the doc becomes its own book.
+ * Docs outside any book don't show on /drop/docs, because the index only
+ * lists books. This covers docs created outside the node form (the API, MCP
+ * tools, sample content). Runs before book_node_insert/book_node_update,
+ * which pick up the book data and create the menu link.
  */
 function drop_docs_node_presave($node) {
   if (!isset($node->type) || $node->type !== 'doc') {
@@ -149,11 +195,18 @@ function drop_docs_node_presave($node) {
       return;
     }
   }
-  // Orphan doc — make it its own new book so it appears on /drop/docs.
-  if (!isset($node->book) || !is_array($node->book)) {
-    $node->book = array();
+  // Doc outside any book. Start from core's defaults so the menu link is
+  // saved as a book link, like the ones the node form creates.
+  $node->book = _book_link_defaults(!empty($node->nid) ? $node->nid : 'new');
+  $default = drop_docs_default_book();
+  if ($default) {
+    $node->book['bid'] = $default['bid'];
+    $node->book['plid'] = $default['mlid'];
+    $node->book['menu_name'] = book_menu_name($default['bid']);
   }
-  $node->book['bid'] = 'new';
+  else {
+    $node->book['bid'] = 'new';
+  }
 }
 
 function drop_docs_node_access($node, $op, $account) {

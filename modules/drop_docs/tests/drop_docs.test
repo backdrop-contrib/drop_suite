@@ -55,6 +55,18 @@ abstract class DropDocsTestBase extends BackdropWebTestCase {
     node_save($node);
     return $node;
   }
+
+  /**
+   * Deletes the "Documentation" book created on install and clears the
+   * default book setting, for tests that need a site with no docs.
+   */
+  protected function removeDefaultBook() {
+    $bid = (int) config_get('drop_docs.settings', 'default_book');
+    if ($bid) {
+      node_delete($bid);
+    }
+    config_set('drop_docs.settings', 'default_book', 0);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -325,6 +337,9 @@ class DropDocsDisplayNameTest extends DropDocsTestBase {
     $this->viewerUser = $this->backdropCreateUser(array(
       'access drop_docs',
     ));
+
+    // These tests check the empty state, so start without the install book.
+    $this->removeDefaultBook();
   }
 
   /**
@@ -351,5 +366,143 @@ class DropDocsDisplayNameTest extends DropDocsTestBase {
     $doc = $this->createTestDoc('KB Article');
     $this->backdropGet('node/' . $doc->nid);
     $this->assertText('Knowledge Base');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Default book tests
+// ---------------------------------------------------------------------------
+
+/**
+ * Tests the default book that new docs are placed in.
+ */
+class DropDocsDefaultBookTest extends DropDocsTestBase {
+
+  public static function getInfo() {
+    return array(
+      'name'        => 'Drop Docs Default Book',
+      'description' => 'Verifies install creates a default book and docs saved without a book are placed in it.',
+      'group'       => 'Drop Docs',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp('drop_suite', 'book', 'drop_docs');
+
+    $this->adminUser = $this->backdropCreateUser(array(
+      'access drop_docs',
+      'administer drop_docs',
+      'create doc content',
+      'edit any doc content',
+      'add content to books',
+      'administer book outlines',
+      'bypass node access',
+    ));
+  }
+
+  /**
+   * Saves a doc without any book data, the way API and MCP tools do.
+   *
+   * @return Node
+   *   The reloaded node.
+   */
+  protected function createBooklessDoc($title, $status = 1) {
+    $node = entity_create('node', array(
+      'type'     => 'doc',
+      'title'    => $title,
+      'uid'      => $this->adminUser->uid,
+      'language' => LANGUAGE_NONE,
+      'status'   => $status,
+    ));
+    node_save($node);
+    return node_load($node->nid, NULL, TRUE);
+  }
+
+  /**
+   * Install creates a published "Documentation" book and sets it as default.
+   */
+  public function testInstallCreatesDefaultBook() {
+    $default = drop_docs_default_book();
+    $this->assertTrue($default, 'A default book is configured after install.');
+    $root = node_load($default['bid']);
+    $this->assertEqual($root->title, 'Documentation', 'Default book is titled "Documentation".');
+    $this->assertEqual($root->status, 1, 'Default book is published.');
+    $this->assertEqual($root->book['bid'], $root->nid, 'Default book node is a book root.');
+  }
+
+  /**
+   * A doc saved without a book becomes a top-level page of the default book.
+   */
+  public function testBooklessDocJoinsDefaultBook() {
+    $default = drop_docs_default_book();
+    $doc = $this->createBooklessDoc('API Doc');
+
+    $this->assertEqual($doc->book['bid'], $default['bid'], 'Doc joined the default book.');
+    $this->assertEqual($doc->book['plid'], $default['mlid'], 'Doc is a top-level page of the default book.');
+    $this->assertEqual($doc->book['module'], 'book', 'Menu link is saved as a book link.');
+  }
+
+  /**
+   * An unpublished doc in the default book views without PHP warnings.
+   *
+   * When a draft was the top page of its own book, book_block_view() threw
+   * "array offset on null" warnings, because core leaves unpublished nodes
+   * out of book menu trees. SimpleTest fails on any such warning. The book
+   * navigation block only renders when the book has published pages below
+   * its top page, so a published sibling is created first.
+   */
+  public function testUnpublishedBooklessDocViews() {
+    $this->createBooklessDoc('Published Sibling', 1);
+    $doc = $this->createBooklessDoc('Draft Doc', 0);
+
+    $this->backdropLogin($this->adminUser);
+    $this->backdropGet('node/' . $doc->nid);
+    $this->assertResponse(200);
+    $this->assertText('Draft Doc');
+    $this->assertRaw('book-title', 'Book navigation block renders on the draft.');
+    $this->assertText('Published Sibling', 'Book navigation lists the published sibling.');
+  }
+
+  /**
+   * With no default book set, a bookless doc becomes its own book.
+   */
+  public function testNoDefaultBookFallsBackToOwnBook() {
+    config_set('drop_docs.settings', 'default_book', 0);
+    $doc = $this->createBooklessDoc('Standalone API Doc');
+
+    $this->assertEqual($doc->book['bid'], $doc->nid, 'Doc became its own book.');
+    $this->assertEqual($doc->book['module'], 'book', 'Menu link is saved as a book link.');
+  }
+
+  /**
+   * A doc placed in another book on purpose stays there.
+   */
+  public function testExplicitBookIsKept() {
+    $other = $this->createTestDoc('Other Book');
+    $child = $this->createTestDoc('Other Child', $other);
+    $this->assertEqual($child->book['bid'], $other->nid, 'Doc stayed in the book it was put in.');
+  }
+
+  /**
+   * The add form pre-selects the default book.
+   */
+  public function testAddFormPreselectsDefaultBook() {
+    $default = drop_docs_default_book();
+    $this->backdropLogin($this->adminUser);
+    $this->backdropGet('node/add/doc');
+    $this->assertOptionSelected('edit-book-bid', $default['bid'], 'Default book is pre-selected on the add form.');
+  }
+
+  /**
+   * The settings form saves the default book.
+   */
+  public function testSettingsFormSavesDefaultBook() {
+    $other = $this->createTestDoc('Team Handbook');
+    $this->backdropLogin($this->adminUser);
+    $this->backdropPost('drop/docs/settings', array('default_book' => $other->nid), t('Save settings'));
+    $this->assertEqual((int) config_get('drop_docs.settings', 'default_book'), $other->nid, 'Default book setting saved.');
+
+    $doc = $this->createBooklessDoc('Handbook Page');
+    $this->assertEqual($doc->book['bid'], $other->nid, 'New bookless doc joined the newly chosen default book.');
   }
 }

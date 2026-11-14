@@ -151,6 +151,24 @@ function drop_docs_settings_form($form, &$form_state) {
     '#default_value' => $config->get('display_name'),
   );
 
+  $book_options = array(0 => t('None (each new doc starts its own book)'));
+  foreach (_drop_docs_get_doc_books() as $bid => $book) {
+    $book_options[$bid] = $book['title'];
+  }
+  $form['new_docs'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('New docs'),
+    '#collapsible' => TRUE,
+    '#collapsed' => FALSE,
+  );
+  $form['new_docs']['default_book'] = array(
+    '#type' => 'select',
+    '#title' => t('Default book'),
+    '#description' => t('New docs are added to this book unless the author chooses a different book or creates a new one. Docs created through the API or other tools also go here.'),
+    '#options' => $book_options,
+    '#default_value' => (int) $config->get('default_book'),
+  );
+
   $form['actions'] = array('#type' => 'actions');
   $form['actions']['submit'] = array(
     '#type' => 'submit',
@@ -166,6 +184,7 @@ function drop_docs_settings_form($form, &$form_state) {
 function drop_docs_settings_form_submit($form, &$form_state) {
   $config = config('drop_docs.settings');
   $config->set('display_name', $form_state['values']['display_name']);
+  $config->set('default_book', (int) $form_state['values']['default_book']);
   $config->save();
   backdrop_set_message(t('Settings saved.'));
   $form_state['redirect'] = 'drop/docs';
