@@ -256,7 +256,9 @@ function drop_crm_field_extra_fields() {
   );
 
   // Organization-specific display fields.
+  // Organizations have no Relationships section (relationships link people).
   $extra['crm_contact']['crm_organization']['display'] = $shared_display;
+  unset($extra['crm_contact']['crm_organization']['display']['relationships']);
   $extra['crm_contact']['crm_organization']['display']['affiliated_contacts'] = array(
     'label' => t('Affiliated people'),
     'description' => t('People who list this organization as their employer.'),
