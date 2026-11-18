@@ -384,6 +384,9 @@ function drop_start_step_theme($form, &$form_state) {
   $releases_link = l(t('Opera releases page'), 'https://github.com/backdrop-contrib/opera/releases', array(
     'attributes' => array('target' => '_blank', 'rel' => 'noopener'),
   ));
+  // Direct archive link for the manual installer. Update when a newer
+  // 1.x-2.x release ships; drop this once 1.x-2.x is the recommended release.
+  $opera_beta_zip = 'https://github.com/backdrop-contrib/opera/releases/download/1.x-2.0.0-beta004/opera.zip';
   $opera_version = ($opera && !empty($opera->info['version'])) ? $opera->info['version'] : '';
   if ($opera_version && strpos($opera_version, '1.x-1.') === 0) {
     $subform['opera_beta'] = array(
@@ -424,16 +427,17 @@ function drop_start_step_theme($form, &$form_state) {
           '%install' => t('Install new themes'),
         )) . '</p>'
         . '<ol>'
-        . '<li>' . t('On the !releases, find the latest 1.x-2.x release and copy the link to its %zip file.', array(
-          '!releases' => $releases_link,
-          '%zip' => 'opera.zip',
-        )) . '</li>'
-        . '<li>' . t('Paste that link into %field on the !manual_link page, or download the file and upload it there.', array(
+        . '<li>' . t('Copy this link to the Opera 1.x-2.x beta archive:') . '<br><code>' . check_plain($opera_beta_zip) . '</code></li>'
+        . '<li>' . t('Paste it into %field on the !manual_link page and click Install.', array(
           '%field' => t('Install from a URL'),
           '!manual_link' => l(t('Manual installation'), 'admin/installer/manual'),
         )) . '</li>'
         . '<li>' . t('Return here and re-open this step to switch to it.') . '</li>'
         . '</ol>'
+        . '<p>' . t('A newer 1.x-2.x release may be listed on the !releases. If you use one, copy the link to its %zip file under Assets, not the link to the release page itself.', array(
+          '!releases' => $releases_link,
+          '%zip' => 'opera.zip',
+        )) . '</p>'
         . '<p>' . t('You can also skip this step and change themes later from %path.', array(
           '%path' => 'admin/appearance',
         )) . '</p>',
