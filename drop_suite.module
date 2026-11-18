@@ -2080,7 +2080,7 @@ function drop_suite_user_presave($account) {
  * Returns the package names recognized as Drop Suite modules.
  */
 function drop_suite_get_drop_package_names() {
-  return array('Drop Suites', 'Drop Suites Lab');
+  return array('Drop Suite', 'Drop Suite Lab');
 }
 
 /**
