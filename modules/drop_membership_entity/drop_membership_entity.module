@@ -14,8 +14,10 @@
  * - Drop Suite fit: drop/memberships pages, a nav link, a settings card, and
  *   membership pages shown in the Drop Suite layout for administrators.
  *
- * Drop Pay, Drop Suite and Drop CRM User are optional: each feature checks
- * for its module before doing anything.
+ * Requires Drop Suite and Membership Entity (with Membership Entity Term).
+ * Drop Pay and Drop CRM User are optional: without Drop Pay there are no
+ * prices or payments, and without Drop CRM User payments are not linked to a
+ * CRM contact. Each of those features checks for its module first.
  */
 
 /**
@@ -88,9 +90,6 @@ function drop_membership_entity_admin_paths_alter(&$paths) {
 function drop_membership_entity_layout_load_by_router_item_alter(&$layouts, $router_item) {
   $path = isset($router_item['path']) ? $router_item['path'] : '';
   if (strpos($path, 'membership/%') !== 0 || !user_access('administer memberships')) {
-    return;
-  }
-  if (!module_exists('drop_suite')) {
     return;
   }
   $drop_pages = layout_load('drop_pages');

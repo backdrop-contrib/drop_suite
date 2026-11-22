@@ -13,9 +13,10 @@ Drop Suite ships as a single contrib project containing a parent module and a cu
 | **Drop Start** | Sample content generation and onboarding wizard for fresh installs. | — | drop_suite |
 | **Drop CRM** | Lightweight CRM with contacts (people, organizations, households), activities, and contact methods. Full Views integration. | `drop/crm` | drop_suite, entity_plus, entity_ui, entityreference |
 | **Drop CRM User** *(submodule)* | Bridges Backdrop user accounts to Drop CRM contacts. Optional auto-create on user registration. | — | drop_crm |
-| **Drop CRM Membership** *(submodule)* | Membership tracking with terms, renewals, dues, and an active/grace/lapsed state machine on cron. | `drop/crm/memberships` | drop_crm |
+| **Drop CRM Membership** *(submodule, deprecated)* | Older membership tracking built into Drop CRM. Kept for now but no longer developed: use Drop Membership Entity for new sites. | `drop/crm/memberships` | drop_crm |
 | **Drop Docs** | Hierarchical team wiki/documentation built on Backdrop's Book module. | `drop/docs` | drop_suite, book |
 | **Drop Files** | Team file sharing library with tag-based organization. | `drop/files` | drop_suite, taxonomy |
+| **Drop Membership Entity** | Memberships for Drop Suite, built on the contrib Membership Entity module: Drop Suite pages and navigation, a price for each term length, and online join and renewal payments through Drop Pay (optional). | `drop/memberships` | drop_suite, membership_entity, membership_entity_term |
 
 The project also ships the **Drop Suite layout** (bundled inside the parent module) — a full-width application layout used for `/drop/*` pages.
 
@@ -23,7 +24,8 @@ The project also ships the **Drop Suite layout** (bundled inside the parent modu
 
 - **Drop Suite** (the parent) is the foundation. Every submodule depends on it. It owns the project entity, primary navigation, layout, settings dashboard framework, and admin-shortcut buttons (Add Person, Add Board).
 - **Drop Dashboard** aggregates content from other Drop modules into a daily list. Other modules don't depend on it; it depends on them via `module_exists()` so it gracefully skips features that aren't enabled.
-- **Drop CRM** is the data hub. Contacts, activities, and contact methods live here. Submodules add user-account bridging and membership management.
+- **Drop CRM** is the data hub. Contacts, activities, and contact methods live here. Submodules add user-account bridging (and the deprecated Drop CRM Membership).
+- **Drop Membership Entity** handles memberships. Membership Entity stores the memberships and terms; this module adds the Drop Suite pages, prices and payments. With Drop CRM User enabled, payments are linked to the member's CRM contact.
 - **Drop Docs** and **Drop Files** are independent content modules — they don't talk to Drop CRM, just share the chrome and conventions provided by the parent.
 
 ## Requirements
@@ -32,6 +34,8 @@ The project also ships the **Drop Suite layout** (bundled inside the parent modu
 - [Entity Plus](https://github.com/backdrop-contrib/entity_plus) — required by Drop Suite (parent) and Drop CRM
 - [Entity UI](https://github.com/backdrop-contrib/entity_ui) — required by Drop CRM
 - [Entity Reference](https://github.com/backdrop-contrib/entityreference) — required by Drop CRM
+- [Membership Entity](https://github.com/backdrop-contrib/membership_entity) 1.x-1.2.3 or later — required by Drop Membership Entity
+- Drop Pay — optional, for membership prices and payments. It is still in Drop Suite Lab, not in this project.
 
 Backdrop core's **Book** module is required by Drop Docs (already in core, just needs enabling). **Taxonomy** is required by Drop Files (also core).
 
@@ -55,6 +59,7 @@ Settings live at `drop/settings` — a dashboard page that lists configuration e
 - **Drop CRM**: `drop/crm/settings` (activity types, contact-method labels, relationship types, outreach goals)
 - **Drop Docs**: `drop/docs/settings`
 - **Drop Files**: `drop/files/settings`
+- **Drop Membership Entity**: term lengths and prices are on the membership type settings (`admin/memberships/types`)
 
 Most configuration is stored in Backdrop's config system (JSON files in `config/active/`).
 
