@@ -1,0 +1,12 @@
+name = Drop Membership Entity
+description = Connects the contrib Membership Entity module to Drop Suite: membership prices and payments through Drop Pay, Drop Suite pages and navigation.
+package = Drop Suite
+version = 1.x-1.0.0
+type = module
+backdrop = 1.x
+
+dependencies[] = drop_suite
+dependencies[] = membership_entity (>=1.x-1.2.3)
+dependencies[] = membership_entity_term (>=1.x-1.2.3)
+
+configure = drop/memberships

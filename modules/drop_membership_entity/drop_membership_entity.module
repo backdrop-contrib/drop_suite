@@ -1,0 +1,703 @@
+<?php
+/**
+ * @file
+ * Drop Membership Entity — glue between Membership Entity and Drop Suite.
+ *
+ * - Prices: one price per term length per membership type, set on the
+ *   membership type settings form.
+ * - Payments (when Drop Pay is enabled):
+ *   - Administrators adding or renewing a membership can record an offline
+ *     payment (cash, check) against the new term.
+ *   - Members joining or renewing pay online. Their new term is saved as
+ *     Pending (no member role) and becomes Active when the payment completes;
+ *     a cancelled or failed payment removes it again.
+ * - Drop Suite fit: drop/memberships pages, a nav link, a settings card, and
+ *   membership pages shown in the Drop Suite layout for administrators.
+ *
+ * Drop Pay, Drop Suite and Drop CRM User are optional: each feature checks
+ * for its module before doing anything.
+ */
+
+/**
+ * Drop Pay purpose for membership payments.
+ */
+define('DROP_MEMBERSHIP_ENTITY_PURPOSE', 'membership_entity');
+
+// ---------------------------------------------------------------------------
+// Menu, nav and layout
+// ---------------------------------------------------------------------------
+
+/**
+ * Implements hook_menu().
+ */
+function drop_membership_entity_menu() {
+  $items['drop/memberships'] = array(
+    'title'            => 'Memberships',
+    'page callback'    => 'drop_membership_entity_list_page',
+    'access arguments' => array('administer memberships'),
+    'file'             => 'drop_membership_entity.pages.inc',
+  );
+  $items['membership/%membership_entity/unfinished-payment/continue'] = array(
+    'title'            => 'Continue payment',
+    'page callback'    => 'drop_membership_entity_continue_payment_page',
+    'page arguments'   => array(1),
+    'access callback'  => 'membership_entity_access',
+    'access arguments' => array('view', 1),
+    'type'             => MENU_CALLBACK,
+    'file'             => 'drop_membership_entity.pages.inc',
+  );
+  $items['membership/%membership_entity/unfinished-payment/cancel'] = array(
+    'title'            => 'Cancel payment',
+    'page callback'    => 'backdrop_get_form',
+    'page arguments'   => array('drop_membership_entity_cancel_payment_form', 1),
+    'access callback'  => 'membership_entity_access',
+    'access arguments' => array('view', 1),
+    'type'             => MENU_CALLBACK,
+    'file'             => 'drop_membership_entity.pages.inc',
+  );
+  $items['drop/memberships/add'] = array(
+    'title'            => 'Add a membership',
+    'page callback'    => 'drop_membership_entity_add_page',
+    'access arguments' => array('administer memberships'),
+    'file'             => 'drop_membership_entity.pages.inc',
+    'type'             => MENU_LOCAL_ACTION,
+  );
+  return $items;
+}
+
+/**
+ * Implements hook_admin_paths_alter().
+ *
+ * Membership Entity forces its edit and delete pages into the admin theme.
+ * Drop Suite works in the front-end theme, so show them there like the
+ * membership page itself.
+ */
+function drop_membership_entity_admin_paths_alter(&$paths) {
+  foreach (array('membership/*/edit', 'membership/*/delete', 'membership/*/term/*/edit', 'membership/*/term/*/delete') as $path) {
+    unset($paths[$path]);
+  }
+}
+
+/**
+ * Implements hook_layout_load_by_router_item_alter().
+ *
+ * Shows membership pages (membership/N and its tabs) in Drop Suite's layout
+ * for administrators, the way drop_suite does for drop/* pages. Members
+ * looking at their own membership keep the site's normal layout.
+ */
+function drop_membership_entity_layout_load_by_router_item_alter(&$layouts, $router_item) {
+  $path = isset($router_item['path']) ? $router_item['path'] : '';
+  if (strpos($path, 'membership/%') !== 0 || !user_access('administer memberships')) {
+    return;
+  }
+  if (!module_exists('drop_suite')) {
+    return;
+  }
+  $drop_pages = layout_load('drop_pages');
+  if (!$drop_pages || !empty($drop_pages->disabled)) {
+    return;
+  }
+  $layouts = array('drop_pages' => $drop_pages) + $layouts;
+}
+
+/**
+ * How long a membership payment may stay pending before cron cancels it.
+ *
+ * Stripe's checkout links expire after 24 hours anyway, so a payment older than
+ * this can't be completed by the payer.
+ */
+define('DROP_MEMBERSHIP_ENTITY_STALE_SECONDS', 86400);
+
+/**
+ * Implements hook_cron().
+ *
+ * Cancels online membership payments that were started but never finished.
+ * Each one goes through drop_pay_abandon(): Stripe is asked first, so a
+ * payment that went through after all is completed, not cancelled. Cancelling
+ * removes the pending term, as the cancel button does.
+ */
+function drop_membership_entity_cron() {
+  if (!module_exists('drop_pay')) {
+    return;
+  }
+  $pids = db_select('drop_payment', 'p')
+    ->fields('p', array('pid'))
+    ->condition('purpose', DROP_MEMBERSHIP_ENTITY_PURPOSE)
+    ->condition('purpose_entity_type', 'membership_entity_term')
+    ->condition('status', 'pending')
+    ->condition('created', REQUEST_TIME - DROP_MEMBERSHIP_ENTITY_STALE_SECONDS, '<')
+    ->orderBy('pid')
+    ->range(0, 50)
+    ->execute()
+    ->fetchCol();
+
+  foreach ($pids as $pid) {
+    $payment = drop_payment_load($pid);
+    if (!$payment) {
+      continue;
+    }
+    $result = drop_pay_abandon($payment);
+    watchdog('drop_membership_entity', 'Abandoned membership payment #@pid: @result.', array(
+      '@pid'    => $pid,
+      '@result' => $result,
+    ), WATCHDOG_INFO);
+  }
+}
+
+/**
+ * Implements hook_drop_nav_links().
+ */
+function drop_membership_entity_drop_nav_links() {
+  return array(
+    array(
+      'title'      => t('Memberships'),
+      'path'       => 'drop/memberships',
+      'permission' => 'administer memberships',
+      'weight'     => 35,
+      'icon'       => 'identification-card',
+    ),
+  );
+}
+
+/**
+ * Implements hook_drop_settings_info().
+ */
+function drop_membership_entity_drop_settings_info() {
+  $path = module_exists('membership_entity_type')
+    ? 'admin/memberships/types'
+    : 'admin/memberships/types/manage/membership';
+  return array(
+    'drop_membership_entity' => array(
+      'title'       => t('Memberships'),
+      'description' => t('Membership types, term lengths and prices.'),
+      'path'        => $path,
+      'permission'  => 'administer membership types',
+      'weight'      => 24,
+    ),
+  );
+}
+
+/**
+ * Implements hook_membership_entity_view().
+ *
+ * Shows the unfinished-payment panel on the membership page.
+ */
+function drop_membership_entity_membership_entity_view($membership, $view_mode, $langcode) {
+  if ($view_mode !== 'full' || !membership_entity_access('view', $membership)) {
+    return;
+  }
+  if ($payment = _drop_membership_entity_pending_payment($membership)) {
+    $membership->content['drop_unfinished_payment'] = array(
+      '#markup' => _drop_membership_entity_unfinished_panel($membership, $payment),
+      '#weight' => -10,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Unfinished payments
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the unfinished online payment for a membership's pending term.
+ *
+ * @return DropPayment|FALSE
+ *   The newest pending payment for a Pending term of this membership, or FALSE.
+ */
+function _drop_membership_entity_pending_payment($membership) {
+  if (!module_exists('drop_pay') || empty($membership->mid)) {
+    return FALSE;
+  }
+  $pid = db_query("SELECT p.pid FROM {drop_payment} p INNER JOIN {membership_entity_term} t ON t.id = p.purpose_entity_id WHERE p.purpose = :purpose AND p.purpose_entity_type = :type AND p.status = :status AND t.mid = :mid AND t.status = :term_status ORDER BY p.pid DESC LIMIT 1", array(
+    ':purpose'     => DROP_MEMBERSHIP_ENTITY_PURPOSE,
+    ':type'        => 'membership_entity_term',
+    ':status'      => 'pending',
+    ':mid'         => $membership->mid,
+    ':term_status' => MEMBERSHIP_ENTITY_PENDING,
+  ))->fetchField();
+  return $pid ? drop_payment_load($pid) : FALSE;
+}
+
+/**
+ * Returns the panel that offers to continue or cancel an unfinished payment.
+ */
+function _drop_membership_entity_unfinished_panel($membership, $payment) {
+  $options = array('attributes' => array('class' => array('button')));
+  return '<div class="messages warning drop-membership-entity-unfinished">'
+    . '<p>' . t('You started a payment of @amount on @date and have not finished it. Until it is paid or cancelled, this membership cannot be renewed.', array(
+      '@amount' => _drop_membership_entity_format_amount($payment->amount),
+      '@date'   => format_date($payment->created, 'short'),
+    )) . '</p>'
+    . '<p>'
+    . l(t('Continue payment'), 'membership/' . $membership->mid . '/unfinished-payment/continue', $options) . ' '
+    . l(t('Cancel payment'), 'membership/' . $membership->mid . '/unfinished-payment/cancel', $options)
+    . '</p></div>';
+}
+
+// ---------------------------------------------------------------------------
+// Prices
+// ---------------------------------------------------------------------------
+
+/**
+ * Implements hook_membership_entity_bundle_settings_defaults().
+ */
+function drop_membership_entity_membership_entity_bundle_settings_defaults() {
+  return array(
+    'drop_membership_entity_prices' => array(),
+  );
+}
+
+/**
+ * Implements hook_membership_entity_settings_alter().
+ *
+ * Adds a price for each term length to the membership type settings form.
+ * The values are saved with the type's other settings.
+ */
+function drop_membership_entity_membership_entity_settings_alter(&$form, &$form_state, $data) {
+  if (!module_exists('drop_pay')) {
+    return;
+  }
+  $lengths = !empty($data['available_term_lengths']) ? $data['available_term_lengths'] : array();
+  $prices = !empty($data['drop_membership_entity_prices']) ? $data['drop_membership_entity_prices'] : array();
+
+  $form['drop_membership_entity_prices'] = array(
+    '#type'        => 'fieldset',
+    '#title'       => t('Prices'),
+    '#description' => t('The price of each term length, charged when someone joins or renews online and suggested when staff record a payment. Leave a price blank for a free term. New term lengths appear here after you save.'),
+    '#tree'        => TRUE,
+    '#weight'      => 20,
+  );
+  if (empty($lengths)) {
+    $form['drop_membership_entity_prices']['empty'] = array(
+      '#markup' => '<p>' . t('Add a term length and save before setting prices.') . '</p>',
+    );
+    return;
+  }
+  foreach ($lengths as $length) {
+    $form['drop_membership_entity_prices'][$length] = array(
+      '#type'             => 'textfield',
+      '#title'            => check_plain($length),
+      '#size'             => 10,
+      '#field_prefix'     => '$',
+      '#default_value'    => isset($prices[$length]) ? $prices[$length] : '',
+      '#element_validate' => array('_drop_membership_entity_price_validate'),
+    );
+  }
+}
+
+/**
+ * Element validator for a price: blank, or a number of zero or more.
+ */
+function _drop_membership_entity_price_validate($element, &$form_state) {
+  $value = trim($element['#value']);
+  if ($value !== '' && (!is_numeric($value) || $value < 0)) {
+    form_error($element, t('The price for %length must be a number, without a currency sign.', array('%length' => $element['#title'])));
+  }
+}
+
+/**
+ * Returns the price of a term length, or NULL when none is set.
+ *
+ * @param string $type
+ *   The membership type machine name.
+ * @param string $length
+ *   The term length, e.g. '1 year'.
+ *
+ * @return float|null
+ *   The price, or NULL if the term has no price.
+ */
+function drop_membership_entity_price($type, $length) {
+  $settings = membership_entity_get_bundle_settings($type);
+  $prices = !empty($settings['drop_membership_entity_prices']) ? $settings['drop_membership_entity_prices'] : array();
+  if (!isset($prices[$length]) || trim($prices[$length]) === '') {
+    return NULL;
+  }
+  return (float) $prices[$length];
+}
+
+/**
+ * Formats an amount for display, e.g. '$50.00'.
+ */
+function _drop_membership_entity_format_amount($amount) {
+  return '$' . number_format((float) $amount, 2);
+}
+
+/**
+ * Whether online payment is possible: Drop Pay with a default gateway.
+ */
+function _drop_membership_entity_online_ready() {
+  if (!module_exists('drop_pay')) {
+    return FALSE;
+  }
+  $gateway = drop_pay_default_gateway();
+  return $gateway !== '' && drop_pay_get_gateway($gateway);
+}
+
+// ---------------------------------------------------------------------------
+// Form alters
+// ---------------------------------------------------------------------------
+
+/**
+ * Implements hook_module_implements_alter().
+ *
+ * Our form alters must run after membership_entity_term_form_alter(), which
+ * adds the term fields and submit handler. Alphabetically we would run first.
+ */
+function drop_membership_entity_module_implements_alter(&$implementations, $hook) {
+  if ($hook === 'form_alter' && isset($implementations['drop_membership_entity'])) {
+    $group = $implementations['drop_membership_entity'];
+    unset($implementations['drop_membership_entity']);
+    $implementations['drop_membership_entity'] = $group;
+  }
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter() for membership_entity_edit_form().
+ *
+ * Runs after membership_entity_term_form_alter(), which adds the term fields
+ * and the term submit handler when a membership is being created.
+ */
+function drop_membership_entity_form_membership_entity_edit_form_alter(&$form, &$form_state) {
+  if (!is_array($form) || empty($form['#membership_entity']->is_new) || !isset($form['membership_term']['term'])) {
+    return;
+  }
+  _drop_membership_entity_label_prices($form);
+  if (module_exists('drop_pay') && user_access('administer memberships')) {
+    _drop_membership_entity_attach_offline($form);
+  }
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter() for membership_entity_join_form().
+ */
+function drop_membership_entity_form_membership_entity_join_form_alter(&$form, &$form_state) {
+  if (!is_array($form) || !isset($form['membership_term']['term'])) {
+    return;
+  }
+  _drop_membership_entity_label_prices($form);
+  _drop_membership_entity_attach_online($form, 'membership_entity_term_create_form_submit');
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter() for membership_entity_term_renew().
+ *
+ * Administrators renew on behalf of members and record payments offline;
+ * everyone else pays online.
+ */
+function drop_membership_entity_form_membership_entity_term_renew_alter(&$form, &$form_state) {
+  if (!is_array($form) || !isset($form['membership_term']['term'])) {
+    return;
+  }
+  _drop_membership_entity_label_prices($form);
+  if ($payment = _drop_membership_entity_pending_payment($form['#membership_entity'])) {
+    $form['drop_unfinished_payment'] = array(
+      '#markup' => _drop_membership_entity_unfinished_panel($form['#membership_entity'], $payment),
+      '#weight' => -100,
+    );
+  }
+  if (user_access('administer memberships')) {
+    if (module_exists('drop_pay')) {
+      _drop_membership_entity_attach_offline($form);
+    }
+  }
+  else {
+    _drop_membership_entity_attach_online($form, 'membership_entity_term_renew_submit');
+  }
+}
+
+/**
+ * Adds the price to each term length option, e.g. "1 year — $50.00".
+ */
+function _drop_membership_entity_label_prices(&$form) {
+  if (!module_exists('drop_pay')) {
+    return;
+  }
+  $type = $form['#membership_entity']->type;
+  foreach ($form['membership_term']['term']['#options'] as $length => $label) {
+    $price = drop_membership_entity_price($type, $length);
+    if ($price !== NULL && $price > 0) {
+      $form['membership_term']['term']['#options'][$length] = t('@length — @price', array(
+        '@length' => $label,
+        '@price'  => _drop_membership_entity_format_amount($price),
+      ));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Offline payments (administrators)
+// ---------------------------------------------------------------------------
+
+/**
+ * Adds a Payment fieldset for recording an offline payment.
+ */
+function _drop_membership_entity_attach_offline(&$form) {
+  $type = $form['#membership_entity']->type;
+  $prices = array();
+  foreach (array_keys($form['membership_term']['term']['#options']) as $length) {
+    $price = drop_membership_entity_price($type, $length);
+    if ($price !== NULL) {
+      $prices[] = t('@length: @price', array('@length' => $length, '@price' => _drop_membership_entity_format_amount($price)));
+    }
+  }
+
+  $form['drop_membership_entity_payment'] = array(
+    '#type'   => 'fieldset',
+    '#title'  => t('Payment'),
+    '#tree'   => TRUE,
+    '#weight' => 9000,
+  );
+  $form['drop_membership_entity_payment']['method'] = array(
+    '#type'    => 'select',
+    '#title'   => t('Payment received'),
+    '#options' => array('' => t('- No payment recorded -')) + drop_pay_manual_methods(),
+  );
+  $form['drop_membership_entity_payment']['amount'] = array(
+    '#type'         => 'textfield',
+    '#title'        => t('Amount'),
+    '#size'         => 10,
+    '#field_prefix' => '$',
+    '#description'  => $prices
+      ? t('Leave blank to use the price of the chosen term length (@prices).', array('@prices' => implode(', ', $prices)))
+      : t('No prices are set for this membership type, so enter the amount paid.'),
+    '#states'       => array(
+      'invisible' => array(':input[name="drop_membership_entity_payment[method]"]' => array('value' => '')),
+    ),
+  );
+  $form['drop_membership_entity_payment']['reference'] = array(
+    '#type'        => 'textfield',
+    '#title'       => t('Reference'),
+    '#maxlength'   => 255,
+    '#description' => t('Check number, receipt number or other note. Optional.'),
+    '#states'      => array(
+      'invisible' => array(':input[name="drop_membership_entity_payment[method]"]' => array('value' => '')),
+    ),
+  );
+
+  $form['#validate'][] = '_drop_membership_entity_offline_validate';
+  $form['actions']['submit']['#submit'][] = '_drop_membership_entity_offline_submit';
+}
+
+/**
+ * Validation handler: works out the amount of an offline payment.
+ */
+function _drop_membership_entity_offline_validate($form, &$form_state) {
+  $payment = $form_state['values']['drop_membership_entity_payment'];
+  if (empty($payment['method'])) {
+    return;
+  }
+  $amount = trim($payment['amount']);
+  if ($amount === '') {
+    $length = isset($form_state['values']['membership_term']['term']) ? $form_state['values']['membership_term']['term'] : '';
+    $price = drop_membership_entity_price($form['#membership_entity']->type, $length);
+    if ($price === NULL || $price <= 0) {
+      form_set_error('drop_membership_entity_payment][amount', t('Enter the amount paid: the chosen term length has no price.'));
+      return;
+    }
+    $amount = $price;
+  }
+  elseif (!is_numeric($amount) || $amount <= 0) {
+    form_set_error('drop_membership_entity_payment][amount', t('Enter an amount greater than zero, without a currency sign.'));
+    return;
+  }
+  form_set_value($form['drop_membership_entity_payment']['amount'], $amount, $form_state);
+}
+
+/**
+ * Submit handler: records the offline payment against the new term.
+ *
+ * Runs after Membership Entity has saved the membership and its term.
+ */
+function _drop_membership_entity_offline_submit($form, &$form_state) {
+  $payment = $form_state['values']['drop_membership_entity_payment'];
+  if (empty($payment['method']) || empty($form_state['membership_entity_term']->id)) {
+    return;
+  }
+  $membership = $form_state['membership_entity'];
+  $term = $form_state['membership_entity_term'];
+
+  $result = drop_pay_record_payment(array(
+    'amount'              => $payment['amount'],
+    'description'         => _drop_membership_entity_payment_description($membership, $term),
+    'method'              => $payment['method'],
+    'reference'           => $payment['reference'],
+    'cid'                 => _drop_membership_entity_cid($membership),
+    'purpose'             => DROP_MEMBERSHIP_ENTITY_PURPOSE,
+    'purpose_entity_type' => 'membership_entity_term',
+    'purpose_entity_id'   => $term->id,
+  ));
+  if (!empty($result['error'])) {
+    backdrop_set_message(t('The membership was saved, but the payment could not be recorded: @error', array('@error' => $result['error'])), 'error');
+    return;
+  }
+  backdrop_set_message(t('Payment of @amount recorded.', array('@amount' => _drop_membership_entity_format_amount($payment['amount']))));
+}
+
+// ---------------------------------------------------------------------------
+// Online payments (members)
+// ---------------------------------------------------------------------------
+
+/**
+ * Wraps a join or renew form's term handler with the online payment steps.
+ *
+ * @param array $form
+ *   The form.
+ * @param string $term_handler
+ *   The submit handler that saves the new term. The term is marked Pending
+ *   just before it, and the payment starts after the last handler.
+ */
+function _drop_membership_entity_attach_online(&$form, $term_handler) {
+  if (!_drop_membership_entity_online_ready()) {
+    return;
+  }
+  $submits = &$form['actions']['submit']['#submit'];
+  $position = array_search($term_handler, $submits);
+  if ($position === FALSE) {
+    return;
+  }
+  array_splice($submits, $position, 0, array('_drop_membership_entity_online_mark_pending'));
+  $submits[] = '_drop_membership_entity_online_charge';
+}
+
+/**
+ * Submit handler: saves the new term as Pending when it has a price.
+ */
+function _drop_membership_entity_online_mark_pending($form, &$form_state) {
+  $length = isset($form_state['values']['membership_term']['term']) ? $form_state['values']['membership_term']['term'] : '';
+  $price = drop_membership_entity_price($form['#membership_entity']->type, $length);
+  if ($price === NULL || $price <= 0) {
+    return;
+  }
+  $form_state['values']['membership_term']['status'] = MEMBERSHIP_ENTITY_PENDING;
+  $form_state['drop_membership_entity_charge'] = $price;
+}
+
+/**
+ * Submit handler: starts the online payment and sends the payer to it.
+ */
+function _drop_membership_entity_online_charge($form, &$form_state) {
+  if (empty($form_state['drop_membership_entity_charge']) || empty($form_state['membership_entity_term']->id)) {
+    return;
+  }
+  $membership = $form_state['membership_entity'];
+  $term = $form_state['membership_entity_term'];
+  $back = user_is_logged_in() ? 'membership/' . $membership->mid : '<front>';
+
+  $result = drop_pay_charge(array(
+    'amount'              => $form_state['drop_membership_entity_charge'],
+    'description'         => _drop_membership_entity_payment_description($membership, $term),
+    'cid'                 => _drop_membership_entity_cid($membership),
+    'purpose'             => DROP_MEMBERSHIP_ENTITY_PURPOSE,
+    'purpose_entity_type' => 'membership_entity_term',
+    'purpose_entity_id'   => $term->id,
+    'return_path'         => $back,
+    'cancel_path'         => $back,
+  ));
+
+  if (!empty($result['error'])) {
+    _drop_membership_entity_discard_pending_term($term->id);
+    backdrop_get_messages('status');
+    backdrop_set_message(t('The payment could not be started, so nothing was saved: @error', array('@error' => $result['error'])), 'error');
+    $form_state['redirect'] = $back;
+    return;
+  }
+
+  // Membership Entity has already said the membership was created or
+  // renewed; that only becomes true once the payment completes.
+  backdrop_get_messages('status');
+  $form_state['redirect'] = $result['redirect_url'];
+}
+
+/**
+ * Implements hook_drop_pay_payment_status().
+ *
+ * - Completed: activates the Pending term it paid for.
+ * - Cancelled or failed: removes that Pending term.
+ * - Refunded: cancels the term it paid for, which removes the member role.
+ *   An administrator can set the term back to Active if the refund was a
+ *   goodwill gesture.
+ *
+ * Terms already in the right state (offline payments, a payment confirmed
+ * twice) are left alone.
+ */
+function drop_membership_entity_drop_pay_payment_status($payment, $previous_status) {
+  if ($payment->purpose !== DROP_MEMBERSHIP_ENTITY_PURPOSE || $payment->purpose_entity_type !== 'membership_entity_term') {
+    return;
+  }
+  $term = membership_entity_term_load($payment->purpose_entity_id, TRUE);
+  if (!$term) {
+    return;
+  }
+
+  if ($payment->status === 'refunded') {
+    if ($previous_status !== 'refunded' && $term->status != MEMBERSHIP_ENTITY_CANCELLED) {
+      $term->status = MEMBERSHIP_ENTITY_CANCELLED;
+      membership_entity_term_save($term);
+      watchdog('drop_membership_entity', 'Payment #@pid refunded; membership term @id cancelled.', array('@pid' => $payment->pid, '@id' => $term->id));
+    }
+    return;
+  }
+
+  if ($term->status != MEMBERSHIP_ENTITY_PENDING) {
+    return;
+  }
+
+  if ($payment->status === 'completed') {
+    $term->status = MEMBERSHIP_ENTITY_ACTIVE;
+    membership_entity_term_save($term);
+    watchdog('drop_membership_entity', 'Payment #@pid completed; membership term @id is now active.', array('@pid' => $payment->pid, '@id' => $term->id));
+  }
+  elseif (in_array($payment->status, array('cancelled', 'failed'))) {
+    _drop_membership_entity_discard_pending_term($term->id);
+    watchdog('drop_membership_entity', 'Payment #@pid @status; pending membership term @id removed.', array(
+      '@pid'    => $payment->pid,
+      '@status' => $payment->status,
+      '@id'     => $term->id,
+    ));
+  }
+}
+
+/**
+ * Deletes a Pending term, and its membership if that was its only term.
+ *
+ * Used when an online payment doesn't go through, so a membership created
+ * by the join form doesn't linger with nothing paid.
+ */
+function _drop_membership_entity_discard_pending_term($term_id) {
+  $term = membership_entity_term_load($term_id, TRUE);
+  if (!$term || $term->status != MEMBERSHIP_ENTITY_PENDING) {
+    return;
+  }
+  $mid = $term->mid;
+  membership_entity_term_delete($term_id);
+
+  $remaining = db_query('SELECT COUNT(*) FROM {membership_entity_term} WHERE mid = :mid', array(':mid' => $mid))->fetchField();
+  if (!$remaining) {
+    membership_entity_delete($mid);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the payment description for a membership term.
+ */
+function _drop_membership_entity_payment_description($membership, $term) {
+  return t('Membership @member_id: @length', array(
+    '@member_id' => $membership->member_id,
+    '@length'    => $term->term,
+  ));
+}
+
+/**
+ * Returns the CRM contact ID linked to the member's account, or NULL.
+ */
+function _drop_membership_entity_cid($membership) {
+  if (empty($membership->uid) || !function_exists('drop_crm_user_get_contact')) {
+    return NULL;
+  }
+  $contact = drop_crm_user_get_contact($membership->uid);
+  return $contact ? (int) $contact->cid : NULL;
+}
