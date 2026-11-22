@@ -8,8 +8,8 @@
  * Catches anything that breaks an action link in a list — bad URL paths,
  * id-formatting bugs (e.g. comma thousands-separator leaking into a URL
  * token), permission regressions, broken page callbacks. Stays accurate
- * automatically: any new View page added under drop_suites* / drop_suites_lab*
- * is picked up next test run.
+ * automatically: any drop/* View page from a module enabled in setUp() is
+ * picked up next test run.
  */
 
 /**
@@ -147,41 +147,31 @@ class DropCrmLinksSmokeTest extends BackdropWebTestCase {
   // ---------------------------------------------------------------------------
 
   /**
-   * Returns drop/* page paths declared by Views configs in any drop_suites*
-   * module. Skips paths with wildcards (entity detail pages).
+   * Returns the drop/* page paths of every enabled View in the test site.
+   *
+   * Asks Views rather than scanning module folders, so only modules enabled
+   * in setUp() count and folder renames can't hide every path again (the
+   * old scan looked in modules/drop_suites after the rename to drop_suite
+   * and quietly found nothing). Skips paths with wildcards (entity detail
+   * pages).
    */
   protected function discoverDropListPaths() {
     $paths = array();
-    $roots = array(
-      BACKDROP_ROOT . '/modules/drop_suites',
-      BACKDROP_ROOT . '/modules/drop_suites_lab',
-    );
-    foreach ($roots as $root) {
-      if (!is_dir($root)) {
-        continue;
-      }
-      $files = file_scan_directory($root, '/^views\.view\..+\.json$/');
-      foreach ($files as $file) {
-        $json = @file_get_contents($file->uri);
-        $view = $json ? backdrop_json_decode($json) : NULL;
-        if (empty($view['display'])) {
+    foreach (views_get_enabled_views() as $view) {
+      foreach ($view->display as $display) {
+        if ($display->display_plugin !== 'page') {
           continue;
         }
-        foreach ($view['display'] as $disp) {
-          if (empty($disp['display_plugin']) || $disp['display_plugin'] !== 'page') {
-            continue;
-          }
-          $path = isset($disp['display_options']['path']) ? $disp['display_options']['path'] : '';
-          if (strpos($path, 'drop/') !== 0) {
-            continue;
-          }
-          // Wildcards (e.g. "drop/crm/contact/%") need a real arg — skip for
-          // this list-page smoke test.
-          if (strpos($path, '%') !== FALSE) {
-            continue;
-          }
-          $paths[$path] = $path;
+        $path = isset($display->display_options['path']) ? $display->display_options['path'] : '';
+        if (strpos($path, 'drop/') !== 0) {
+          continue;
         }
+        // Wildcards (e.g. "drop/crm/contact/%") need a real arg — skip for
+        // this list-page smoke test.
+        if (strpos($path, '%') !== FALSE) {
+          continue;
+        }
+        $paths[$path] = $path;
       }
     }
     ksort($paths);
