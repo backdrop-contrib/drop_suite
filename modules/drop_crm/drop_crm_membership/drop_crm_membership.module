@@ -1456,14 +1456,14 @@ function _drop_crm_membership_generate_member_id($mid) {
 }
 
 /**
- * Implements hook_droppay_payment_status().
+ * Implements hook_drop_pay_payment_status().
  *
  * When a Drop Pay charge for a membership term completes, mirror it as a
  * crm_membership_payment row so it appears in the membership's payment
  * history alongside manually-logged payments. Idempotent — guarded by a
- * "droppay:{pid}" reference marker.
+ * "drop_pay:{pid}" reference marker.
  */
-function drop_crm_membership_droppay_payment_status($payment, $previous_status) {
+function drop_crm_membership_drop_pay_payment_status($payment, $previous_status) {
   if ($payment->status !== 'completed' || $previous_status === 'completed') {
     return;
   }
@@ -1475,7 +1475,7 @@ function drop_crm_membership_droppay_payment_status($payment, $previous_status) 
     return;
   }
 
-  $marker = 'droppay:' . $payment->pid;
+  $marker = 'drop_pay:' . $payment->pid;
   $exists = (bool) db_query('SELECT 1 FROM {crm_membership_payment} WHERE reference = :ref', array(':ref' => $marker))->fetchField();
   if ($exists) {
     return;
