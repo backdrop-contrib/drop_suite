@@ -21,3 +21,9 @@ name = Drop Membership Entity unfinished payments
 description = Abandoned checkouts: checked with the gateway, expired, then cancelled; paid ones completed; the membership page panel and the Continue and Cancel pages; the daily cron cleanup.
 group = Drop Membership Entity
 file = drop_membership_entity.test
+
+[DropMembershipEntityWithoutDropPayTest]
+name = Drop Membership Entity without Drop Pay
+description = Without Drop Pay the Drop Suite pages work and nothing shows prices or asks for payment. The other classes in this group need Drop Pay (Drop Suite Lab) and are skipped when it is missing.
+group = Drop Membership Entity
+file = drop_membership_entity.test

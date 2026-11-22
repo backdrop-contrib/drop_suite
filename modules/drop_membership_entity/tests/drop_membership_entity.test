@@ -18,20 +18,57 @@ abstract class DropMembershipEntityTestBase extends BackdropWebTestCase {
   protected $memberRole;
 
   /**
+   * Whether this test class needs Drop Pay.
+   *
+   * Drop Pay is optional and lives in Drop Suite Lab, so it may not be
+   * installed. Classes that need it are skipped when it is missing.
+   *
+   * @var bool
+   */
+  protected $needsDropPay = TRUE;
+
+  /**
+   * Whether the Drop Pay module is present in the codebase.
+   *
+   * @return bool
+   *   TRUE when drop_pay can be enabled.
+   */
+  protected static function dropPayAvailable() {
+    return (bool) backdrop_get_filename('module', 'drop_pay');
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * Skips the whole class, with one note in the results, when it needs Drop
+   * Pay and Drop Pay is not installed.
+   */
+  public function run(array $methods = array()) {
+    if ($this->needsDropPay && !self::dropPayAvailable()) {
+      $this->pass(t('Skipped @class: it needs the Drop Pay module (Drop Suite Lab), which is not installed.', array('@class' => get_class($this))), 'Requirements check.');
+      return;
+    }
+    parent::run($methods);
+  }
+
+  /**
    * {@inheritdoc}
    */
   protected function setUp() {
-    parent::setUp(array(
+    $modules = array(
       'entity_plus',
       'entity_ui',
       'views',
       'date',
       'membership_entity',
       'membership_entity_term',
-      'drop_pay',
-      'drop_pay_test_gateway',
-      'drop_membership_entity',
-    ));
+    );
+    if ($this->needsDropPay) {
+      $modules[] = 'drop_pay';
+      $modules[] = 'drop_pay_test_gateway';
+    }
+    $modules[] = 'drop_membership_entity';
+    parent::setUp($modules);
 
     $this->memberRole = $this->backdropCreateRole(array(), 'member');
     config_set('membership_entity.settings', 'membership_entity_settings', array(
@@ -49,9 +86,11 @@ abstract class DropMembershipEntityTestBase extends BackdropWebTestCase {
       'available_term_lengths' => array('1 year', '2 years'),
       'drop_membership_entity_prices' => array('1 year' => '50', '2 years' => ''),
     ));
-    config_set('drop_pay.settings', 'default_gateway', 'test');
-    backdrop_static_reset('drop_pay_get_gateways');
-    state_del('drop_pay_test_gateway:status_log');
+    if ($this->needsDropPay) {
+      config_set('drop_pay.settings', 'default_gateway', 'test');
+      backdrop_static_reset('drop_pay_get_gateways');
+      state_del('drop_pay_test_gateway:status_log');
+    }
   }
 
   /**
@@ -351,6 +390,58 @@ class DropMembershipEntityPagesTest extends DropMembershipEntityTestBase {
   public function testAdminPaths() {
     $this->assertFalse(path_is_admin('membership/1/edit'), 'Membership edit is not an admin path.');
     $this->assertFalse(path_is_admin('membership/1/term/1/edit'), 'Term edit is not an admin path.');
+  }
+
+}
+
+/**
+ * The module without Drop Pay: Drop Suite pages work, nothing asks for money.
+ */
+class DropMembershipEntityWithoutDropPayTest extends DropMembershipEntityTestBase {
+
+  /**
+   * {@inheritdoc}
+   */
+  protected $needsDropPay = FALSE;
+
+  /**
+   * Pages load; no prices or Payment fieldset appear anywhere.
+   */
+  public function testWithoutDropPay() {
+    $this->assertFalse(module_exists('drop_pay'), 'Drop Pay is not enabled.');
+
+    $admin = $this->backdropCreateUser(array('administer memberships', 'administer membership terms'));
+    $this->backdropLogin($admin);
+
+    $this->backdropGet('drop/memberships');
+    $this->assertResponse(200, 'The memberships list loads.');
+
+    $this->backdropGet('admin/memberships/types/manage/membership');
+    $this->assertResponse(200, 'The membership type settings load.');
+    $this->assertNoText(t('Prices'), 'The type settings have no Prices fieldset.');
+
+    $this->backdropGet('drop/memberships/add');
+    $this->assertResponse(200, 'The add page loads.');
+    $this->assertFieldByName('membership_term[term]', NULL, 'The add form shows the term lengths.');
+    $this->assertNoText('$50.00', 'Term lengths show no price.');
+    $this->assertNoFieldByName('drop_membership_entity_payment[method]', NULL, 'The add form has no Payment fieldset.');
+  }
+
+  /**
+   * A member renews and the new term is active straight away.
+   */
+  public function testMemberRenewsWithoutPayment() {
+    $member = $this->backdropCreateUser(array('membership renew own membership', 'membership view own membership'));
+    list($membership) = $this->createMembershipWithTerm($member);
+    $this->backdropLogin($member);
+
+    $this->backdropGet('membership/' . $membership->mid . '/renew');
+    $this->assertResponse(200, 'The renew form loads.');
+    $this->assertNoText('$50.00', 'Term lengths show no price.');
+
+    $this->backdropPost(NULL, array('membership_term[term]' => '1 year'), t('Renew'));
+    $term_id = db_query('SELECT MAX(id) FROM {membership_entity_term} WHERE mid = :mid', array(':mid' => $membership->mid))->fetchField();
+    $this->assertEqual($this->reloadTerm($term_id)->status, MEMBERSHIP_ENTITY_ACTIVE, 'The renewal is active straight away: nothing is charged.');
   }
 
 }
