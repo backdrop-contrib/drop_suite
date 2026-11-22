@@ -437,8 +437,8 @@ function drop_crm_membership_renew_form($form, &$form_state, $membership) {
 
   // Offer "Pay online" alongside the standard Renew submit when Drop Pay has
   // a default gateway configured.
-  if (function_exists('droppay_default_gateway') && droppay_default_gateway() !== '') {
-    $gw = droppay_get_gateway(droppay_default_gateway());
+  if (function_exists('drop_pay_default_gateway') && drop_pay_default_gateway() !== '') {
+    $gw = drop_pay_get_gateway(drop_pay_default_gateway());
     if ($gw) {
       $form['actions']['pay_online'] = array(
         '#type'   => 'submit',
@@ -534,7 +534,7 @@ function drop_crm_membership_renew_form_submit($form, &$form_state) {
  * Submit handler for the renew form's "Pay online" button.
  *
  * Creates the term immediately, then hands the user off to the configured
- * Drop Pay gateway. On successful return, hook_droppay_payment_status creates
+ * Drop Pay gateway. On successful return, hook_drop_pay_payment_status creates
  * the matching crm_membership_payment row.
  */
 function drop_crm_membership_renew_form_pay_online_submit($form, &$form_state) {
@@ -561,7 +561,7 @@ function drop_crm_membership_renew_form_pay_online_submit($form, &$form_state) {
     '!name' => $contact ? $contact->label() : ('Member #' . $membership->mid),
   ));
 
-  $result = droppay_charge(array(
+  $result = drop_pay_charge(array(
     'amount'              => (float) $v['pay_amount'],
     'description'         => $description,
     'cid'                 => $membership->cid,
