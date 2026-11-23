@@ -1,0 +1,639 @@
+<?php
+/**
+ * @file
+ * Tests for Drop Membership Entity.
+ */
+
+/**
+ * Shared setup: Membership Entity with terms and prices, Drop Pay with the
+ * test gateway as default.
+ */
+abstract class DropMembershipEntityTestBase extends BackdropWebTestCase {
+
+  /**
+   * The role granted to active members.
+   *
+   * @var string
+   */
+  protected $memberRole;
+
+  /**
+   * Whether this test class needs Drop Pay.
+   *
+   * Drop Pay is optional and lives in Drop Suite Lab, so it may not be
+   * installed. Classes that need it are skipped when it is missing.
+   *
+   * @var bool
+   */
+  protected $needsDropPay = TRUE;
+
+  /**
+   * Whether the Drop Pay module is present in the codebase.
+   *
+   * @return bool
+   *   TRUE when drop_pay can be enabled.
+   */
+  protected static function dropPayAvailable() {
+    return (bool) backdrop_get_filename('module', 'drop_pay');
+  }
+
+  /**
+   * {@inheritdoc}
+   *
+   * Skips the whole class, with one note in the results, when it needs Drop
+   * Pay and Drop Pay is not installed.
+   */
+  public function run(array $methods = array()) {
+    if ($this->needsDropPay && !self::dropPayAvailable()) {
+      $this->pass(t('Skipped @class: it needs the Drop Pay module (Drop Suite Lab), which is not installed.', array('@class' => get_class($this))), 'Requirements check.');
+      return;
+    }
+    parent::run($methods);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  protected function setUp() {
+    $modules = array(
+      'entity_plus',
+      'entity_ui',
+      'views',
+      'date',
+      'membership_entity',
+      'membership_entity_term',
+    );
+    if ($this->needsDropPay) {
+      $modules[] = 'drop_pay';
+      $modules[] = 'drop_pay_test_gateway';
+    }
+    $modules[] = 'drop_membership_entity';
+    parent::setUp($modules);
+
+    $this->memberRole = $this->backdropCreateRole(array(), 'member');
+    config_set('membership_entity.settings', 'membership_entity_settings', array(
+      'member_id_format'   => 'membership_entity_numeric_member_id',
+      'member_id_settings' => array('length' => 5),
+      'cardinality'        => 1,
+      'primary_role'       => $this->memberRole,
+      'secondary_role'     => '',
+      'show_on_profile'    => 1,
+      'all_edit'           => 0,
+      'grace_period'       => 'none',
+      'custom_grace_period' => 'none',
+      'tz_handling'        => 'site',
+      'timezone_db'        => 'UTC',
+      'available_term_lengths' => array('1 year', '2 years'),
+      'drop_membership_entity_prices' => array('1 year' => '50', '2 years' => ''),
+    ));
+    if ($this->needsDropPay) {
+      config_set('drop_pay.settings', 'default_gateway', 'test');
+      backdrop_static_reset('drop_pay_get_gateways');
+      state_del('drop_pay_test_gateway:status_log');
+    }
+  }
+
+  /**
+   * Creates a membership for an account, with one term.
+   *
+   * @param object $account
+   *   The member's account.
+   * @param int $status
+   *   The term status.
+   *
+   * @return array
+   *   The membership and the term.
+   */
+  protected function createMembershipWithTerm($account, $status = MEMBERSHIP_ENTITY_ACTIVE) {
+    $membership = membership_entity_create(array('uid' => $account->uid, 'type' => 'membership'));
+    $membership->save();
+    $term = membership_entity_term_create(array(
+      'mid'    => $membership->mid,
+      'term'   => '1 year',
+      'status' => $status,
+    ));
+    membership_entity_term_save($term);
+    return array($membership, $term);
+  }
+
+  /**
+   * Starts a membership payment for a term through the test gateway.
+   *
+   * @return DropPayment
+   *   The pending payment.
+   */
+  protected function startPayment($term) {
+    $result = drop_pay_charge(array(
+      'amount'              => 50,
+      'description'         => 'Test membership',
+      'purpose'             => DROP_MEMBERSHIP_ENTITY_PURPOSE,
+      'purpose_entity_type' => 'membership_entity_term',
+      'purpose_entity_id'   => $term->id,
+    ));
+    return drop_payment_load($result['pid']);
+  }
+
+  /**
+   * Reloads a term, bypassing caches. Returns FALSE if it was deleted.
+   */
+  protected function reloadTerm($id) {
+    return membership_entity_term_load($id, TRUE);
+  }
+
+}
+
+/**
+ * Prices and the payment status hook.
+ */
+class DropMembershipEntityPaymentTest extends DropMembershipEntityTestBase {
+
+  /**
+   * Prices come from the membership type settings.
+   */
+  public function testPrices() {
+    $this->assertEqual(drop_membership_entity_price('membership', '1 year'), 50.0, 'The 1 year price is read from the settings.');
+    $this->assertIdentical(drop_membership_entity_price('membership', '2 years'), NULL, 'A blank price means no price.');
+    $this->assertIdentical(drop_membership_entity_price('membership', '5 years'), NULL, 'An unknown term length has no price.');
+  }
+
+  /**
+   * A completed payment activates the pending term and its membership.
+   */
+  public function testCompletedPaymentActivatesTerm() {
+    $account = $this->backdropCreateUser();
+    list($membership, $term) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_PENDING);
+    $membership = membership_entity_load($membership->mid, TRUE);
+    $this->assertEqual($membership->status, MEMBERSHIP_ENTITY_PENDING, 'A membership with only a pending term is pending.');
+
+    $payment = $this->startPayment($term);
+    drop_pay_set_status($payment, 'completed');
+
+    $term = $this->reloadTerm($term->id);
+    $this->assertEqual($term->status, MEMBERSHIP_ENTITY_ACTIVE, 'The term is active once the payment completes.');
+    $membership = membership_entity_load($membership->mid, TRUE);
+    $this->assertEqual($membership->status, MEMBERSHIP_ENTITY_ACTIVE, 'The membership is active once the payment completes.');
+    $account = user_load($account->uid, TRUE);
+    $this->assertTrue(in_array($this->memberRole, $account->roles), 'The member role is granted.');
+  }
+
+  /**
+   * A cancelled payment removes a new membership and its pending term.
+   */
+  public function testCancelledJoinRemovesMembership() {
+    $account = $this->backdropCreateUser();
+    list($membership, $term) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_PENDING);
+
+    $payment = $this->startPayment($term);
+    drop_pay_set_status($payment, 'cancelled');
+
+    $this->assertFalse($this->reloadTerm($term->id), 'The pending term is removed.');
+    $this->assertFalse(membership_entity_load($membership->mid, TRUE), 'The membership, which had no other term, is removed.');
+  }
+
+  /**
+   * A failed renewal payment removes only the pending renewal term.
+   */
+  public function testFailedRenewalKeepsMembership() {
+    $account = $this->backdropCreateUser();
+    list($membership, $current) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_ACTIVE);
+    $renewal = membership_entity_term_create(array(
+      'mid'        => $membership->mid,
+      'term'       => '1 year',
+      'status'     => MEMBERSHIP_ENTITY_PENDING,
+      'is_renewal' => TRUE,
+    ));
+    membership_entity_term_save($renewal);
+
+    $payment = $this->startPayment($renewal);
+    drop_pay_set_status($payment, 'failed');
+
+    $this->assertFalse($this->reloadTerm($renewal->id), 'The pending renewal term is removed.');
+    $this->assertTrue($this->reloadTerm($current->id), 'The current term is kept.');
+    $membership = membership_entity_load($membership->mid, TRUE);
+    $this->assertEqual($membership->status, MEMBERSHIP_ENTITY_ACTIVE, 'The membership stays active.');
+  }
+
+  /**
+   * A refunded payment cancels the term it paid for.
+   */
+  public function testRefundCancelsTerm() {
+    $account = $this->backdropCreateUser();
+    list($membership, $term) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_PENDING);
+    $payment = $this->startPayment($term);
+    drop_pay_set_status($payment, 'completed');
+    $account = user_load($account->uid, TRUE);
+    $this->assertTrue(in_array($this->memberRole, $account->roles), 'The member role is granted after payment.');
+
+    $payment = entity_load('drop_payment', array($payment->pid), array(), TRUE);
+    drop_pay_set_status(reset($payment), 'refunded');
+
+    $this->assertEqual($this->reloadTerm($term->id)->status, MEMBERSHIP_ENTITY_CANCELLED, 'The term is cancelled after a refund.');
+    $membership = membership_entity_load($membership->mid, TRUE);
+    $this->assertEqual($membership->status, MEMBERSHIP_ENTITY_CANCELLED, 'The membership is cancelled after a refund.');
+    $account = user_load($account->uid, TRUE);
+    $this->assertFalse(in_array($this->memberRole, $account->roles), 'The member role is removed after a refund.');
+  }
+
+  /**
+   * Refunding an offline payment cancels its term too.
+   */
+  public function testOfflineRefundCancelsTerm() {
+    $account = $this->backdropCreateUser();
+    list($membership, $term) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_ACTIVE);
+    $result = drop_pay_record_payment(array(
+      'amount'              => 50,
+      'description'         => 'Dues by check',
+      'method'              => 'check',
+      'purpose'             => DROP_MEMBERSHIP_ENTITY_PURPOSE,
+      'purpose_entity_type' => 'membership_entity_term',
+      'purpose_entity_id'   => $term->id,
+    ));
+    $this->assertEqual($this->reloadTerm($term->id)->status, MEMBERSHIP_ENTITY_ACTIVE, 'Recording an offline payment leaves the term active.');
+
+    $payment = entity_load('drop_payment', array($result['pid']), array(), TRUE);
+    drop_pay_set_status(reset($payment), 'refunded');
+    $this->assertEqual($this->reloadTerm($term->id)->status, MEMBERSHIP_ENTITY_CANCELLED, 'Marking the offline payment refunded cancels the term.');
+  }
+
+  /**
+   * Payments for other purposes, and active terms, are left alone.
+   */
+  public function testOtherPaymentsIgnored() {
+    $account = $this->backdropCreateUser();
+    list($membership, $term) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_PENDING);
+
+    $result = drop_pay_charge(array(
+      'amount'              => 50,
+      'description'         => 'Unrelated',
+      'purpose'             => 'dues',
+      'purpose_entity_type' => 'membership_entity_term',
+      'purpose_entity_id'   => $term->id,
+    ));
+    drop_pay_set_status(drop_payment_load($result['pid']), 'cancelled');
+    $this->assertEqual($this->reloadTerm($term->id)->status, MEMBERSHIP_ENTITY_PENDING, 'A payment with another purpose does not touch the term.');
+  }
+
+}
+
+/**
+ * The renew form: offline payments for administrators, online for members.
+ */
+class DropMembershipEntityRenewFormTest extends DropMembershipEntityTestBase {
+
+  /**
+   * An administrator renews and records a cash payment.
+   */
+  public function testAdminRenewWithCash() {
+    $account = $this->backdropCreateUser();
+    list($membership) = $this->createMembershipWithTerm($account);
+
+    $admin = $this->backdropCreateUser(array('administer memberships', 'administer membership terms', 'administer drop_pay', 'view drop_pay payments'));
+    $this->backdropLogin($admin);
+
+    $this->backdropGet('membership/' . $membership->mid . '/renew');
+    $this->assertText('1 year — $50.00', 'The term length shows its price.');
+    $this->assertFieldByName('drop_membership_entity_payment[method]', '', 'Administrators get the Payment fieldset.');
+
+    $this->backdropPost(NULL, array(
+      'membership_term[term]'                    => '1 year',
+      'drop_membership_entity_payment[method]'    => 'cash',
+      'drop_membership_entity_payment[reference]' => 'R-12',
+    ), t('Renew'));
+    $this->assertText('Payment of $50.00 recorded.', 'The payment is confirmed, using the term price.');
+
+    $term_id = db_query('SELECT MAX(id) FROM {membership_entity_term} WHERE mid = :mid', array(':mid' => $membership->mid))->fetchField();
+    $term = $this->reloadTerm($term_id);
+    $this->assertEqual($term->status, MEMBERSHIP_ENTITY_ACTIVE, 'The renewal term is active straight away.');
+
+    $payment = db_query('SELECT * FROM {drop_payment} ORDER BY pid DESC')->fetchObject();
+    $this->assertEqual($payment->gateway, DROP_PAY_MANUAL, 'An offline payment was recorded.');
+    $this->assertEqual($payment->status, 'completed', 'The payment is completed.');
+    $this->assertEqual((float) $payment->amount, 50.0, 'The amount is the term price.');
+    $this->assertEqual($payment->purpose_entity_id, $term_id, 'The payment points at the new term.');
+  }
+
+  /**
+   * A member renews online: the term waits as pending until payment.
+   */
+  public function testMemberRenewsOnline() {
+    $member = $this->backdropCreateUser(array('membership renew own membership', 'membership view own membership'));
+    list($membership) = $this->createMembershipWithTerm($member);
+    $this->backdropLogin($member);
+
+    $this->backdropGet('membership/' . $membership->mid . '/renew');
+    $this->assertNoFieldByName('drop_membership_entity_payment[method]', NULL, 'Members do not get the offline Payment fieldset.');
+
+    // Stop at the redirect to the (fake) payment page.
+    $this->maximumRedirects = 0;
+    $this->backdropPost(NULL, array('membership_term[term]' => '1 year'), t('Renew'));
+    $this->assertTrue(strpos($this->backdropGetHeader('Location'), 'https://example.test/checkout/') === 0, 'The member is sent to the payment page.');
+    $this->maximumRedirects = 5;
+
+    $term_id = db_query('SELECT MAX(id) FROM {membership_entity_term} WHERE mid = :mid', array(':mid' => $membership->mid))->fetchField();
+    $this->assertEqual($this->reloadTerm($term_id)->status, MEMBERSHIP_ENTITY_PENDING, 'The renewal term waits as pending.');
+
+    $payment = entity_load('drop_payment', array(db_query('SELECT MAX(pid) FROM {drop_payment}')->fetchField()), array(), TRUE);
+    $payment = reset($payment);
+    $this->assertEqual((float) $payment->amount, 50.0, 'The charge is the term price.');
+    $this->assertEqual($payment->purpose_entity_id, $term_id, 'The payment points at the pending term.');
+
+    drop_pay_set_status($payment, 'completed');
+    $this->assertEqual($this->reloadTerm($term_id)->status, MEMBERSHIP_ENTITY_ACTIVE, 'The renewal is active after payment.');
+  }
+
+  /**
+   * A free term length renews without any payment.
+   */
+  public function testFreeTermSkipsPayment() {
+    $member = $this->backdropCreateUser(array('membership renew own membership', 'membership view own membership'));
+    list($membership) = $this->createMembershipWithTerm($member);
+    $this->backdropLogin($member);
+
+    $this->backdropPost('membership/' . $membership->mid . '/renew', array('membership_term[term]' => '2 years'), t('Renew'));
+    $term_id = db_query('SELECT MAX(id) FROM {membership_entity_term} WHERE mid = :mid', array(':mid' => $membership->mid))->fetchField();
+    $this->assertEqual($this->reloadTerm($term_id)->status, MEMBERSHIP_ENTITY_ACTIVE, 'A free renewal is active straight away.');
+    $count = db_query('SELECT COUNT(*) FROM {drop_payment}')->fetchField();
+    $this->assertEqual($count, 0, 'No payment was started.');
+  }
+
+}
+
+/**
+ * Drop Suite pages for Membership Entity.
+ */
+class DropMembershipEntityPagesTest extends DropMembershipEntityTestBase {
+
+  /**
+   * The list and add pages load for administrators, and only for them.
+   */
+  public function testPages() {
+    $admin = $this->backdropCreateUser(array('administer memberships', 'administer membership terms'));
+    $this->backdropLogin($admin);
+
+    $this->backdropGet('drop/memberships');
+    $this->assertResponse(200, 'The memberships list loads.');
+
+    $this->backdropGet('drop/memberships/add');
+    $this->assertResponse(200, 'The add page loads.');
+    $this->assertFieldByName('membership_term[term]', NULL, 'With one membership type, the add form shows directly.');
+    $this->assertFieldByName('drop_membership_entity_payment[method]', '', 'The add form has the Payment fieldset.');
+
+    $this->backdropLogout();
+    $this->backdropLogin($this->backdropCreateUser());
+    $this->backdropGet('drop/memberships');
+    $this->assertResponse(403, 'Others cannot see the memberships list.');
+  }
+
+  /**
+   * Edit and delete pages are no longer forced into the admin theme.
+   */
+  public function testAdminPaths() {
+    $this->assertFalse(path_is_admin('membership/1/edit'), 'Membership edit is not an admin path.');
+    $this->assertFalse(path_is_admin('membership/1/term/1/edit'), 'Term edit is not an admin path.');
+  }
+
+}
+
+/**
+ * The module without Drop Pay: Drop Suite pages work, nothing asks for money.
+ */
+class DropMembershipEntityWithoutDropPayTest extends DropMembershipEntityTestBase {
+
+  /**
+   * {@inheritdoc}
+   */
+  protected $needsDropPay = FALSE;
+
+  /**
+   * Pages load; no prices or Payment fieldset appear anywhere.
+   */
+  public function testWithoutDropPay() {
+    $this->assertFalse(module_exists('drop_pay'), 'Drop Pay is not enabled.');
+
+    $admin = $this->backdropCreateUser(array('administer memberships', 'administer membership terms'));
+    $this->backdropLogin($admin);
+
+    $this->backdropGet('drop/memberships');
+    $this->assertResponse(200, 'The memberships list loads.');
+
+    $this->backdropGet('admin/memberships/types/manage/membership');
+    $this->assertResponse(200, 'The membership type settings load.');
+    $this->assertNoText(t('Prices'), 'The type settings have no Prices fieldset.');
+
+    $this->backdropGet('drop/memberships/add');
+    $this->assertResponse(200, 'The add page loads.');
+    $this->assertFieldByName('membership_term[term]', NULL, 'The add form shows the term lengths.');
+    $this->assertNoText('$50.00', 'Term lengths show no price.');
+    $this->assertNoFieldByName('drop_membership_entity_payment[method]', NULL, 'The add form has no Payment fieldset.');
+  }
+
+  /**
+   * A member renews and the new term is active straight away.
+   */
+  public function testMemberRenewsWithoutPayment() {
+    $member = $this->backdropCreateUser(array('membership renew own membership', 'membership view own membership'));
+    list($membership) = $this->createMembershipWithTerm($member);
+    $this->backdropLogin($member);
+
+    $this->backdropGet('membership/' . $membership->mid . '/renew');
+    $this->assertResponse(200, 'The renew form loads.');
+    $this->assertNoText('$50.00', 'Term lengths show no price.');
+
+    $this->backdropPost(NULL, array('membership_term[term]' => '1 year'), t('Renew'));
+    $term_id = db_query('SELECT MAX(id) FROM {membership_entity_term} WHERE mid = :mid', array(':mid' => $membership->mid))->fetchField();
+    $this->assertEqual($this->reloadTerm($term_id)->status, MEMBERSHIP_ENTITY_ACTIVE, 'The renewal is active straight away: nothing is charged.');
+  }
+
+}
+
+/**
+ * Unfinished online payments: checking with the gateway, cancelling, and the
+ * pages that offer both.
+ */
+class DropMembershipEntityUnfinishedPaymentTest extends DropMembershipEntityTestBase {
+
+  /**
+   * An unpaid checkout is expired at the gateway, then cancelled, which
+   * removes a new membership with no other term.
+   */
+  public function testAbandonUnpaidJoinRemovesMembership() {
+    $account = $this->backdropCreateUser();
+    list($membership, $term) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_PENDING);
+    $payment = $this->startPayment($term);
+    state_set('drop_pay_test_gateway:confirm_result', FALSE);
+
+    $this->assertEqual(drop_pay_abandon($payment), 'cancelled', 'An unpaid checkout is cancelled.');
+    $this->assertEqual(state_get('drop_pay_test_gateway:expire_calls', 0), 1, 'The checkout is expired at the gateway first.');
+    $this->assertEqual(drop_payment_load($payment->pid)->status, 'cancelled', 'The payment is recorded as cancelled.');
+    $this->assertFalse($this->reloadTerm($term->id), 'The pending term is removed.');
+    $this->assertFalse(membership_entity_load($membership->mid, TRUE), 'The membership with no other term is removed.');
+  }
+
+  /**
+   * A renewal that is abandoned leaves the membership and its current term.
+   */
+  public function testAbandonUnpaidRenewalKeepsMembership() {
+    $account = $this->backdropCreateUser();
+    list($membership, $current) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_ACTIVE);
+    $renewal = membership_entity_term_create(array(
+      'mid'        => $membership->mid,
+      'term'       => '1 year',
+      'status'     => MEMBERSHIP_ENTITY_PENDING,
+      'is_renewal' => TRUE,
+    ));
+    membership_entity_term_save($renewal);
+    $payment = $this->startPayment($renewal);
+    state_set('drop_pay_test_gateway:confirm_result', FALSE);
+
+    $this->assertEqual(drop_pay_abandon($payment), 'cancelled', 'An unpaid renewal is cancelled.');
+    $this->assertFalse($this->reloadTerm($renewal->id), 'The pending renewal term is removed.');
+    $this->assertTrue($this->reloadTerm($current->id), 'The current term is kept.');
+    $this->assertTrue(membership_entity_load($membership->mid, TRUE), 'The membership is kept.');
+  }
+
+  /**
+   * A checkout that was paid after all is completed, not cancelled.
+   */
+  public function testAbandonPaidCompletesInstead() {
+    $account = $this->backdropCreateUser();
+    list($membership, $term) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_PENDING);
+    $payment = $this->startPayment($term);
+    state_set('drop_pay_test_gateway:confirm_result', TRUE);
+
+    $this->assertEqual(drop_pay_abandon($payment), 'completed', 'A checkout that was paid is completed.');
+    $this->assertEqual(state_get('drop_pay_test_gateway:expire_calls', 0), 0, 'A paid checkout is not expired.');
+    $this->assertEqual($this->reloadTerm($term->id)->status, MEMBERSHIP_ENTITY_ACTIVE, 'The term is activated, not removed.');
+  }
+
+  /**
+   * If the gateway cannot be reached, nothing changes.
+   */
+  public function testAbandonWhenGatewayUnreachable() {
+    $account = $this->backdropCreateUser();
+    list($membership, $term) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_PENDING);
+    $payment = $this->startPayment($term);
+    state_set('drop_pay_test_gateway:confirm_fails', TRUE);
+
+    $this->assertEqual(drop_pay_abandon($payment), 'error', 'Nothing is cancelled when the gateway cannot be asked.');
+    $this->assertEqual(drop_payment_load($payment->pid)->status, 'pending', 'The payment stays pending.');
+    $this->assertEqual($this->reloadTerm($term->id)->status, MEMBERSHIP_ENTITY_PENDING, 'The term stays pending.');
+  }
+
+  /**
+   * If the checkout cannot be expired, the payment is not cancelled, so the
+   * payer can still pay the link.
+   */
+  public function testAbandonWhenExpireFails() {
+    $account = $this->backdropCreateUser();
+    list($membership, $term) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_PENDING);
+    $payment = $this->startPayment($term);
+    state_set('drop_pay_test_gateway:confirm_result', FALSE);
+    state_set('drop_pay_test_gateway:expire_fails', TRUE);
+
+    $this->assertEqual(drop_pay_abandon($payment), 'error', 'Nothing is cancelled when the checkout cannot be expired.');
+    $this->assertEqual(drop_payment_load($payment->pid)->status, 'pending', 'The payment stays pending, so the link is not orphaned.');
+    $this->assertEqual($this->reloadTerm($term->id)->status, MEMBERSHIP_ENTITY_PENDING, 'The term stays pending.');
+  }
+
+  /**
+   * The membership page offers Continue and Cancel, and Cancel works.
+   */
+  public function testPanelAndCancelPage() {
+    $account = $this->backdropCreateUser();
+    list($membership, $term) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_PENDING);
+    $this->startPayment($term);
+    state_set('drop_pay_test_gateway:confirm_result', FALSE);
+
+    $admin = $this->backdropCreateUser(array('administer memberships', 'administer drop_pay', 'view drop_pay payments'));
+    $this->backdropLogin($admin);
+
+    $this->backdropGet('membership/' . $membership->mid);
+    $this->assertText('have not finished it', 'The membership page explains the unfinished payment.');
+    $this->assertLink('Continue payment', 0, 'The membership page offers to continue.');
+    $this->assertLink('Cancel payment', 0, 'The membership page offers to cancel.');
+
+    $this->backdropPost('membership/' . $membership->mid . '/unfinished-payment/cancel', array(), t('Cancel payment'));
+    $this->assertText('The unfinished payment is cancelled.', 'Cancelling confirms on the next page.');
+    $this->assertFalse(membership_entity_load($membership->mid, TRUE), 'Cancelling a join removes its membership.');
+  }
+
+  /**
+   * Continue sends the payer back to the checkout, unless it was paid.
+   */
+  public function testContinueSendsToCheckout() {
+    $account = $this->backdropCreateUser();
+    list($membership, $term) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_PENDING);
+    $payment = $this->startPayment($term);
+    state_set('drop_pay_test_gateway:confirm_result', FALSE);
+
+    $admin = $this->backdropCreateUser(array('administer memberships'));
+    $this->backdropLogin($admin);
+
+    $this->maximumRedirects = 0;
+    $this->backdropGet('membership/' . $membership->mid . '/unfinished-payment/continue');
+    $location = $this->backdropGetHeader('Location');
+    $this->maximumRedirects = 5;
+    $this->assertTrue(strpos($location, 'https://example.test/checkout/') === 0, 'Continue sends the payer back to the checkout.');
+    $this->assertEqual(drop_payment_load($payment->pid)->status, 'pending', 'Continue does not change an unpaid payment.');
+  }
+
+  /**
+   * Cron cancels stale unpaid payments, completes stale paid ones and leaves
+   * fresh payments alone.
+   */
+  public function testCronCancelsOnlyStaleUnpaid() {
+    $account = $this->backdropCreateUser();
+
+    // Stale and unpaid: cancelled, with its pending term and membership.
+    list($stale_membership, $stale_term) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_PENDING);
+    $stale = $this->startPayment($stale_term);
+    db_update('drop_payment')->fields(array('created' => REQUEST_TIME - 3 * 86400))->condition('pid', $stale->pid)->execute();
+
+    // Fresh and unpaid: left alone.
+    $other = $this->backdropCreateUser();
+    list($fresh_membership, $fresh_term) = $this->createMembershipWithTerm($other, MEMBERSHIP_ENTITY_PENDING);
+    $fresh = $this->startPayment($fresh_term);
+
+    state_set('drop_pay_test_gateway:confirm_result', FALSE);
+    drop_membership_entity_cron();
+
+    $this->assertEqual(drop_payment_load($stale->pid)->status, 'cancelled', 'A stale unpaid payment is cancelled by cron.');
+    $this->assertFalse($this->reloadTerm($stale_term->id), 'Its pending term is removed.');
+    $this->assertFalse(membership_entity_load($stale_membership->mid, TRUE), 'Its membership, with no other term, is removed.');
+    $this->assertEqual(drop_payment_load($fresh->pid)->status, 'pending', 'A payment younger than a day is left alone.');
+    $this->assertEqual($this->reloadTerm($fresh_term->id)->status, MEMBERSHIP_ENTITY_PENDING, 'Its term stays pending.');
+  }
+
+  /**
+   * Cron never cancels a stale payment that was actually paid.
+   */
+  public function testCronCompletesStalePaid() {
+    $account = $this->backdropCreateUser();
+    list($membership, $term) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_PENDING);
+    $payment = $this->startPayment($term);
+    db_update('drop_payment')->fields(array('created' => REQUEST_TIME - 2 * 86400))->condition('pid', $payment->pid)->execute();
+    state_set('drop_pay_test_gateway:confirm_result', TRUE);
+
+    drop_membership_entity_cron();
+
+    $this->assertEqual(drop_payment_load($payment->pid)->status, 'completed', 'A stale payment that was paid is completed.');
+    $this->assertEqual($this->reloadTerm($term->id)->status, MEMBERSHIP_ENTITY_ACTIVE, 'Its term is activated.');
+  }
+
+  /**
+   * If Stripe can't be reached, cron changes nothing and tries again later.
+   */
+  public function testCronLeavesPaymentWhenGatewayUnreachable() {
+    $account = $this->backdropCreateUser();
+    list($membership, $term) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_PENDING);
+    $payment = $this->startPayment($term);
+    db_update('drop_payment')->fields(array('created' => REQUEST_TIME - 2 * 86400))->condition('pid', $payment->pid)->execute();
+    state_set('drop_pay_test_gateway:confirm_fails', TRUE);
+
+    drop_membership_entity_cron();
+
+    $this->assertEqual(drop_payment_load($payment->pid)->status, 'pending', 'Nothing is cancelled while Stripe cannot be asked.');
+    $this->assertEqual($this->reloadTerm($term->id)->status, MEMBERSHIP_ENTITY_PENDING, 'The term stays pending for the next run.');
+  }
+
+}

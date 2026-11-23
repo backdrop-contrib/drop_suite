@@ -1,0 +1,29 @@
+[DropMembershipEntityPaymentTest]
+name = Drop Membership Entity payments
+description = Prices from the type settings; a completed payment activates a pending term; cancelled or failed payments remove it; refunds cancel the term; other payments are ignored.
+group = Drop Membership Entity
+file = drop_membership_entity.test
+
+[DropMembershipEntityRenewFormTest]
+name = Drop Membership Entity renew form
+description = Administrators renew and record a cash payment; members renew online and the term waits as pending; free terms skip payment.
+group = Drop Membership Entity
+file = drop_membership_entity.test
+
+[DropMembershipEntityPagesTest]
+name = Drop Membership Entity pages
+description = drop/memberships list and add pages; membership edit pages are not forced into the admin theme.
+group = Drop Membership Entity
+file = drop_membership_entity.test
+
+[DropMembershipEntityUnfinishedPaymentTest]
+name = Drop Membership Entity unfinished payments
+description = Abandoned checkouts: checked with the gateway, expired, then cancelled; paid ones completed; the membership page panel and the Continue and Cancel pages; the daily cron cleanup.
+group = Drop Membership Entity
+file = drop_membership_entity.test
+
+[DropMembershipEntityWithoutDropPayTest]
+name = Drop Membership Entity without Drop Pay
+description = Without Drop Pay the Drop Suite pages work and nothing shows prices or asks for payment. The other classes in this group need Drop Pay (Drop Suite Lab) and are skipped when it is missing.
+group = Drop Membership Entity
+file = drop_membership_entity.test
