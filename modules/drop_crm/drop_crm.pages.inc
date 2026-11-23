@@ -119,6 +119,49 @@ function drop_crm_contact_view(CrmContact $contact) {
     );
   }
 
+  // --- People with roles (organizations only) ---
+  if ($contact->bundle() === 'crm_organization') {
+    $role_options = _drop_crm_org_link_role_options();
+    $role_rows = array();
+    foreach (_drop_crm_load_org_links($contact->cid, 'org') as $link) {
+      $other = crm_contact_load($link->other_cid);
+      if (!$other) {
+        continue;
+      }
+      $dest = array('query' => array('destination' => 'drop/crm/contact/' . $contact->cid));
+      $role_rows[] = array(
+        l(entity_label('crm_contact', $other), 'drop/crm/contact/' . $other->cid),
+        isset($role_options[$link->role_tid]) ? check_plain($role_options[$link->role_tid]) : t('(removed role)'),
+        check_plain($link->notes),
+        user_access('edit crm contacts')
+          ? l(t('Edit'), 'drop/crm/org-links/' . $link->lid . '/edit', $dest) . ' &middot; ' . l(t('Remove'), 'drop/crm/org-links/' . $link->lid . '/delete', $dest)
+          : '',
+      );
+    }
+    $add_role_link = user_access('edit crm contacts')
+      ? l(t('+ Add person with role'), 'drop/crm/org-links/add', array(
+          'attributes' => array('class' => array('drop-section-add')),
+          'query'      => array('org' => $contact->cid, 'destination' => 'drop/crm/contact/' . $contact->cid),
+        ))
+      : '';
+    $output['org_links'] = array(
+      '#weight' => isset($display['org_links']['weight']) ? $display['org_links']['weight'] : 5,
+      '#access' => !isset($display['org_links']) || $display['org_links']['visible'],
+      '#prefix' => drop_crm_accordion_prefix(t('People with roles'), $add_role_link, TRUE),
+      '#suffix' => drop_crm_accordion_suffix(),
+      'help'    => array(
+        '#markup' => '<p class="crm-section-help">' . t('Volunteers, board members and others connected to this organization who are not staff.') . '</p>',
+        '#weight' => -1,
+      ),
+      'table'   => array(
+        '#theme'  => 'table',
+        '#header' => array(t('Person'), t('Role'), t('Note'), t('Operations')),
+        '#rows'   => $role_rows,
+        '#empty'  => t('No people with roles recorded.'),
+      ),
+    );
+  }
+
   // --- Sub-clients: contacts whose "Through" field points here ---
   if ($contact->bundle() === 'crm_organization') {
     $through = _drop_crm_load_through_contacts($contact->cid);
@@ -279,6 +322,49 @@ function drop_crm_contact_view(CrmContact $contact) {
     '#rows'   => $rel_rows,
     '#empty'  => t('No relationships recorded.'),
   );
+
+  // --- Organization roles (people only) ---
+  if ($contact->bundle() === 'crm_person') {
+    $role_options = _drop_crm_org_link_role_options();
+    $role_rows = array();
+    foreach (_drop_crm_load_org_links($contact->cid, 'person') as $link) {
+      $org = crm_contact_load($link->other_cid);
+      if (!$org) {
+        continue;
+      }
+      $dest = array('query' => array('destination' => 'drop/crm/contact/' . $contact->cid));
+      $role_rows[] = array(
+        l(entity_label('crm_contact', $org), 'drop/crm/contact/' . $org->cid),
+        isset($role_options[$link->role_tid]) ? check_plain($role_options[$link->role_tid]) : t('(removed role)'),
+        check_plain($link->notes),
+        user_access('edit crm contacts')
+          ? l(t('Edit'), 'drop/crm/org-links/' . $link->lid . '/edit', $dest) . ' &middot; ' . l(t('Remove'), 'drop/crm/org-links/' . $link->lid . '/delete', $dest)
+          : '',
+      );
+    }
+    $add_role_link = user_access('edit crm contacts')
+      ? l(t('+ Add organization role'), 'drop/crm/org-links/add', array(
+          'attributes' => array('class' => array('drop-section-add')),
+          'query'      => array('person' => $contact->cid, 'destination' => 'drop/crm/contact/' . $contact->cid),
+        ))
+      : '';
+    $output['org_links'] = array(
+      '#weight' => isset($display['org_links']['weight']) ? $display['org_links']['weight'] : 14,
+      '#access' => (!isset($display['org_links']) || $display['org_links']['visible']) && ($role_rows || $add_role_link),
+      '#prefix' => drop_crm_accordion_prefix(t('Organization roles'), $add_role_link, TRUE),
+      '#suffix' => drop_crm_accordion_suffix(),
+      'help'    => array(
+        '#markup' => '<p class="crm-section-help">' . t('Organizations this person is connected to as a volunteer, board member, or similar. Staff are listed in the Organization field.') . '</p>',
+        '#weight' => -1,
+      ),
+      'table'   => array(
+        '#theme'  => 'table',
+        '#header' => array(t('Organization'), t('Role'), t('Note'), t('Operations')),
+        '#rows'   => $role_rows,
+        '#empty'  => t('No organization roles recorded.'),
+      ),
+    );
+  }
 
   // --- Activities ---
   $output['activities'] = array(

@@ -1,0 +1,139 @@
+<?php
+/**
+ * @file
+ * Tests for person-to-organization role links (volunteer, board member, ...).
+ */
+
+/**
+ * Add, show, reject duplicates, remove, and clean up role links.
+ *
+ * Self-contained: SimpleTest autoloads each .test file independently.
+ */
+class DropCrmOrgLinksTest extends BackdropWebTestCase {
+
+  protected $adminUser;
+  protected $person;
+  protected $org;
+
+  public static function getInfo() {
+    return array(
+      'name'        => 'Drop CRM organization role links',
+      'description' => 'Link a person to an organization with a role, see it on both pages, and remove it.',
+      'group'       => 'Drop CRM',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp('drop_suite', 'drop_crm');
+    $this->adminUser = $this->backdropCreateUser(array('access crm', 'edit crm contacts', 'administer crm'));
+    $this->backdropLogin($this->adminUser);
+
+    $this->person = entity_create('crm_contact', array('type' => 'crm_person', 'status' => 1));
+    $this->person->field_crm_first_name[LANGUAGE_NONE][0]['value'] = 'Barry';
+    $this->person->field_crm_last_name[LANGUAGE_NONE][0]['value'] = 'Madore';
+    $this->person->save();
+    $this->org = entity_create('crm_contact', array('type' => 'crm_organization', 'name' => 'Historic Saint Paul', 'status' => 1));
+    $this->org->save();
+  }
+
+  /**
+   * The role list, table and defaults exist after install.
+   */
+  public function testInstallDefaults() {
+    $this->assertTrue(db_table_exists('crm_org_link'), 'crm_org_link table exists.');
+    $this->assertTrue(taxonomy_vocabulary_machine_name_load('org_link_roles'), 'Roles vocabulary exists.');
+    $roles = array_values(_drop_crm_org_link_role_options());
+    $this->assertEqual($roles, _drop_crm_default_org_link_roles(), 'The default roles are seeded, in order.');
+  }
+
+  /**
+   * Returns the term ID of a seeded role by name.
+   */
+  protected function roleTid($name) {
+    return (int) array_search($name, _drop_crm_org_link_role_options());
+  }
+
+  /**
+   * Add a role through the form, see it on both pages, reject a duplicate.
+   */
+  public function testAddShowDuplicateRemove() {
+    $edit = array(
+      'person'       => 'Barry Madore [cid:' . $this->person->cid . ']',
+      'organization' => 'Historic Saint Paul [cid:' . $this->org->cid . ']',
+      'role'         => $this->roleTid('Volunteer'),
+      'notes'        => 'Helping recover their website',
+    );
+    $this->backdropPost('drop/crm/org-links/add', $edit, t('Add role'));
+    $this->assertText('Organization role added.');
+
+    $this->backdropGet('drop/crm/contact/' . $this->person->cid);
+    $this->assertText('Historic Saint Paul', 'Organization shown on the person page.');
+    $this->assertText('Volunteer', 'Role shown on the person page.');
+
+    $this->backdropGet('drop/crm/contact/' . $this->org->cid);
+    $this->assertText('Barry Madore', 'Person shown on the organization page.');
+    $this->assertText('Helping recover their website', 'Note shown on the organization page.');
+
+    // Same person, organization and role again is rejected.
+    $this->backdropPost('drop/crm/org-links/add', $edit, t('Add role'));
+    $this->assertText('already has that role');
+    $this->assertEqual(db_query('SELECT COUNT(*) FROM {crm_org_link}')->fetchField(), 1, 'Only one link stored.');
+
+    // A different role at the same organization is allowed.
+    $edit['role'] = $this->roleTid('Board member');
+    $this->backdropPost('drop/crm/org-links/add', $edit, t('Add role'));
+    $this->assertEqual(db_query('SELECT COUNT(*) FROM {crm_org_link}')->fetchField(), 2, 'A second role is allowed.');
+
+    // Remove the first link.
+    $lid = db_query('SELECT lid FROM {crm_org_link} WHERE role_tid = :t', array(':t' => $this->roleTid('Volunteer')))->fetchField();
+    $this->backdropPost('drop/crm/org-links/' . $lid . '/delete', array(), t('Remove'));
+    $this->assertEqual(db_query('SELECT COUNT(*) FROM {crm_org_link}')->fetchField(), 1, 'The link was removed.');
+  }
+
+  /**
+   * An organization cannot be used as the person, nor a person as the organization.
+   */
+  public function testRejectsWrongBundles() {
+    $edit = array(
+      'person'       => 'Historic Saint Paul [cid:' . $this->org->cid . ']',
+      'organization' => 'Historic Saint Paul [cid:' . $this->org->cid . ']',
+      'role'         => $this->roleTid('Volunteer'),
+    );
+    $this->backdropPost('drop/crm/org-links/add', $edit, t('Add role'));
+    $this->assertText('Please choose a person.');
+    $this->assertEqual(db_query('SELECT COUNT(*) FROM {crm_org_link}')->fetchField(), 0, 'Nothing stored.');
+  }
+
+  /**
+   * Deleting a contact removes its links.
+   */
+  public function testContactDeleteRemovesLinks() {
+    db_insert('crm_org_link')->fields(array(
+      'cid_person' => $this->person->cid,
+      'cid_org'    => $this->org->cid,
+      'role_tid'   => $this->roleTid('Volunteer'),
+      'created'    => REQUEST_TIME,
+    ))->execute();
+    $this->org->delete();
+    $this->assertEqual(db_query('SELECT COUNT(*) FROM {crm_org_link}')->fetchField(), 0, 'Links to a deleted organization are removed.');
+  }
+
+  /**
+   * A role renamed in the vocabulary keeps its links and shows the new name.
+   */
+  public function testRenamedRoleKeepsLinks() {
+    $tid = $this->roleTid('Volunteer');
+    db_insert('crm_org_link')->fields(array(
+      'cid_person' => $this->person->cid,
+      'cid_org'    => $this->org->cid,
+      'role_tid'   => $tid,
+      'created'    => REQUEST_TIME,
+    ))->execute();
+    $term = taxonomy_term_load($tid);
+    $term->name = 'Helper';
+    taxonomy_term_save($term);
+    $this->backdropGet('drop/crm/contact/' . $this->person->cid);
+    $this->assertText('Helper', 'The renamed role shows on the person page.');
+  }
+
+}

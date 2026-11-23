@@ -2414,6 +2414,18 @@ function drop_crm_settings_form($form, &$form_state) {
     '#default_value' => $config->get('client_stale_days') ?: DROP_CRM_CLIENT_STALE_DAYS,
   );
 
+  // --- Organization roles ---
+  $form['org_roles'] = array(
+    '#type'        => 'fieldset',
+    '#title'       => t('Organization roles'),
+    '#collapsible' => TRUE,
+    '#collapsed'   => TRUE,
+    '#weight'      => $w + 7,
+  );
+  $form['org_roles']['org_roles_link'] = array(
+    '#markup' => '<p>' . t('Roles for people linked to an organization they do not work for (Volunteer, Board member, ...) are terms in the <a href="@url">Organization Roles</a> vocabulary. Add, rename and reorder them there.', array('@url' => url('admin/structure/taxonomy/org_link_roles'))) . '</p>',
+  );
+
   // --- API ---
   $form['api'] = array(
     '#type'        => 'fieldset',
@@ -2793,6 +2805,173 @@ function drop_crm_relationship_delete_confirm_submit($form, &$form_state) {
 
   backdrop_set_message(t('Relationship deleted.'));
   $form_state['redirect'] = 'drop/crm/contact/' . $return_cid;
+}
+
+/**
+ * Form callback: add or edit a person-to-organization role link.
+ *
+ * Roles (volunteer, board member, ...) are for people who are connected to an
+ * organization but are not its staff. Employees stay in the Employer field.
+ *
+ * @param int|null $lid
+ *   Link ID when editing, NULL when adding.
+ */
+function drop_crm_org_link_form($form, &$form_state, $lid = NULL) {
+  $form['#attached']['css'][] = backdrop_get_path('module', 'drop_crm') . '/drop_crm.admin.css';
+
+  $link = $lid ? crm_org_link_load($lid) : NULL;
+  if ($lid && !$link) {
+    backdrop_not_found();
+    backdrop_exit();
+  }
+  $form_state['lid'] = $link ? (int) $link->lid : 0;
+
+  $labels = function ($cid) {
+    $contact = $cid ? crm_contact_load((int) $cid) : NULL;
+    return $contact ? entity_label('crm_contact', $contact) . ' [cid:' . $contact->cid . ']' : '';
+  };
+  $person_default = $link ? $labels($link->cid_person) : (isset($_GET['person']) ? $labels($_GET['person']) : '');
+  $org_default    = $link ? $labels($link->cid_org) : (isset($_GET['org']) ? $labels($_GET['org']) : '');
+
+  $form['person'] = array(
+    '#type'              => 'textfield',
+    '#title'             => t('Person'),
+    '#default_value'     => $person_default,
+    '#required'          => TRUE,
+    '#autocomplete_path' => 'drop/crm/autocomplete/people',
+    '#maxlength'         => 300,
+  );
+  $form['organization'] = array(
+    '#type'              => 'textfield',
+    '#title'             => t('Organization'),
+    '#default_value'     => $org_default,
+    '#required'          => TRUE,
+    '#autocomplete_path' => 'drop/crm/autocomplete/organizations',
+    '#maxlength'         => 300,
+  );
+  $form['role'] = array(
+    '#type'          => 'select',
+    '#title'         => t('Role'),
+    '#options'       => _drop_crm_org_link_role_options(),
+    '#default_value' => $link ? (int) $link->role_tid : NULL,
+    '#required'      => TRUE,
+    '#description'   => t('Staff belong in the person\'s Organization (employer) field instead. Add or rename roles in the <a href="@url">Organization Roles</a> vocabulary.', array('@url' => url('admin/structure/taxonomy/org_link_roles'))),
+  );
+  $form['notes'] = array(
+    '#type'          => 'textfield',
+    '#title'         => t('Note'),
+    '#default_value' => $link ? $link->notes : '',
+    '#maxlength'     => 255,
+    '#description'   => t('Optional, for example "Helping recover their website".'),
+  );
+
+  $form['actions'] = array('#type' => 'actions');
+  $form['actions']['submit'] = array(
+    '#type'  => 'submit',
+    '#value' => $link ? t('Save') : t('Add role'),
+  );
+  $form['actions']['cancel'] = array(
+    '#type'  => 'link',
+    '#title' => t('Cancel'),
+    '#href'  => isset($_GET['destination']) ? $_GET['destination'] : '<front>',
+  );
+
+  return $form;
+}
+
+/**
+ * Validate callback for drop_crm_org_link_form().
+ */
+function drop_crm_org_link_form_validate($form, &$form_state) {
+  $values = $form_state['values'];
+  $cids = array();
+  foreach (array('person' => 'crm_person', 'organization' => 'crm_organization') as $field => $bundle) {
+    if (!preg_match('/\[cid:(\d+)\]/', $values[$field], $m)) {
+      form_set_error($field, t('Please choose from the autocomplete list.'));
+      return;
+    }
+    $contact = crm_contact_load((int) $m[1]);
+    if (!$contact || $contact->bundle() !== $bundle) {
+      form_set_error($field, $bundle === 'crm_person' ? t('Please choose a person.') : t('Please choose an organization.'));
+      return;
+    }
+    $cids[$field] = (int) $m[1];
+  }
+
+  $query = db_select('crm_org_link', 'l')
+    ->condition('cid_person', $cids['person'])
+    ->condition('cid_org', $cids['organization'])
+    ->condition('role_tid', (int) $values['role']);
+  if ($form_state['lid']) {
+    $query->condition('lid', $form_state['lid'], '<>');
+  }
+  if ($query->countQuery()->execute()->fetchField()) {
+    form_set_error('role', t('This person already has that role at this organization.'));
+    return;
+  }
+  $form_state['org_link_cids'] = $cids;
+}
+
+/**
+ * Submit callback for drop_crm_org_link_form().
+ */
+function drop_crm_org_link_form_submit($form, &$form_state) {
+  $cids = $form_state['org_link_cids'];
+  $fields = array(
+    'cid_person' => $cids['person'],
+    'cid_org'    => $cids['organization'],
+    'role_tid'   => (int) $form_state['values']['role'],
+    'notes'      => trim($form_state['values']['notes']),
+  );
+  if ($form_state['lid']) {
+    db_update('crm_org_link')->fields($fields)->condition('lid', $form_state['lid'])->execute();
+    backdrop_set_message(t('Organization role updated.'));
+  }
+  else {
+    $fields['created'] = REQUEST_TIME;
+    db_insert('crm_org_link')->fields($fields)->execute();
+    backdrop_set_message(t('Organization role added.'));
+  }
+  // Go back to the page the person came from, else the person.
+  $form_state['redirect'] = isset($_GET['destination']) ? $_GET['destination'] : 'drop/crm/contact/' . $cids['person'];
+}
+
+/**
+ * Confirm form: remove a person-to-organization role link.
+ */
+function drop_crm_org_link_delete_confirm($form, &$form_state, $lid) {
+  $link = crm_org_link_load($lid);
+  if (!$link) {
+    backdrop_not_found();
+    backdrop_exit();
+  }
+  $person = crm_contact_load($link->cid_person);
+  $org = crm_contact_load($link->cid_org);
+  $roles = _drop_crm_org_link_role_options();
+  $form_state['org_link'] = $link;
+  $cancel = isset($_GET['destination']) ? $_GET['destination'] : 'drop/crm/contact/' . $link->cid_person;
+  return confirm_form(
+    $form,
+    t('Remove the %role role of %person at %org?', array(
+      '%role'   => isset($roles[$link->role_tid]) ? $roles[$link->role_tid] : t('(removed role)'),
+      '%person' => $person ? entity_label('crm_contact', $person) : t('Unknown'),
+      '%org'    => $org ? entity_label('crm_contact', $org) : t('Unknown'),
+    )),
+    $cancel,
+    t('The person and organization stay in the CRM; only this link is removed.'),
+    t('Remove'),
+    t('Cancel')
+  );
+}
+
+/**
+ * Submit callback for drop_crm_org_link_delete_confirm().
+ */
+function drop_crm_org_link_delete_confirm_submit($form, &$form_state) {
+  $link = $form_state['org_link'];
+  db_delete('crm_org_link')->condition('lid', $link->lid)->execute();
+  backdrop_set_message(t('Organization role removed.'));
+  $form_state['redirect'] = isset($_GET['destination']) ? $_GET['destination'] : 'drop/crm/contact/' . $link->cid_person;
 }
 
 /**
