@@ -301,7 +301,8 @@ function drop_suite_meeting_page() {
 
   // Postponed items, each with an Undo link that puts it back on the agenda.
   if ($hidden) {
-    $output .= '<h3>' . t('Postponed (@count)', array('@count' => count($hidden))) . '</h3>';
+    $output .= '<details class="drop-meeting-postponed">';
+    $output .= '<summary>' . t('Postponed (@count)', array('@count' => count($hidden))) . '</summary>';
     $output .= '<div class="drop-meeting-items drop-meeting-items--postponed">';
     foreach ($hidden as $item) {
       $entity_key = $item['entity_type'] . '-' . $item['id'];
@@ -318,7 +319,7 @@ function drop_suite_meeting_page() {
         . '<span class="drop-meeting-actions"><a href="' . $undo_url . '" class="drop-meeting-action drop-meeting-action--undo">' . t('Undo') . '</a></span>'
         . '</div>';
     }
-    $output .= '</div>';
+    $output .= '</div></details>';
   }
 
   backdrop_add_css(backdrop_get_path('module', 'drop_suite') . '/drop_suite.meeting.css');

@@ -122,3 +122,14 @@
   font-size: 0.85em;
   text-decoration: underline;
 }
+
+/* Postponed list is collapsed by default. */
+.drop-meeting-postponed {
+  margin-top: 1.5rem;
+}
+
+.drop-meeting-postponed > summary {
+  cursor: pointer;
+  font-weight: bold;
+  color: var(--drop-text-secondary, #555);
+}
