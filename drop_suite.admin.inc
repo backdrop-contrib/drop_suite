@@ -889,7 +889,10 @@ function drop_suite_settings_form($form, &$form_state) {
     '#field_suffix'  => 'px',
   );
 
+  // The agenda lists tasks and tickets, so the option only makes sense when
+  // droptasks or droptickets is enabled.
   $form['meeting_agenda'] = array(
+    '#access' => drop_suite_meeting_available(),
     '#type' => 'fieldset',
     '#title' => t('Meeting Agenda'),
     '#collapsible' => TRUE,
@@ -917,7 +920,9 @@ function drop_suite_settings_form($form, &$form_state) {
 function drop_suite_settings_form_submit($form, &$form_state) {
   $config = config('drop_suite.settings');
   $config->set('narrow_page_width', (int) $form_state['values']['narrow_page_width']);
-  $config->set('meeting_enabled', (bool) $form_state['values']['meeting_enabled']);
+  if (isset($form_state['values']['meeting_enabled'])) {
+    $config->set('meeting_enabled', (bool) $form_state['values']['meeting_enabled']);
+  }
   $config->save();
   backdrop_set_message(t('Settings saved.'));
 }

@@ -1342,6 +1342,36 @@ function drop_suite_color_options() {
 }
 
 /**
+ * Tells whether the Meeting agenda has anything to list.
+ *
+ * The agenda collects items tagged "Meeting" from tasks and tickets, which
+ * live in the optional droptasks and droptickets modules.
+ *
+ * @return bool
+ */
+function drop_suite_meeting_available() {
+  return module_exists('droptasks') || module_exists('droptickets');
+}
+
+/**
+ * Tells whether the Meeting agenda is available and turned on for this site.
+ *
+ * @return bool
+ */
+function drop_suite_meeting_enabled() {
+  return drop_suite_meeting_available() && config_get('drop_suite.settings', 'meeting_enabled') !== FALSE;
+}
+
+/**
+ * Access callback for the Meeting agenda pages.
+ *
+ * @return bool
+ */
+function drop_suite_meeting_access() {
+  return user_is_logged_in() && drop_suite_meeting_enabled();
+}
+
+/**
  * Implements hook_menu().
  */
 function drop_suite_menu() {
@@ -1472,14 +1502,14 @@ function drop_suite_menu() {
   $items['drop/meeting'] = array(
     'title'            => 'Meeting',
     'page callback'    => 'drop_suite_meeting_page',
-    'access callback'  => 'user_is_logged_in',
+    'access callback'  => 'drop_suite_meeting_access',
     'file'             => 'drop_suite.pages.inc',
   );
   $items['drop/meeting/remove-tag/%'] = array(
     'title'            => 'Remove meeting tag',
     'page callback'    => 'drop_suite_meeting_remove_tag',
     'page arguments'   => array(3),
-    'access callback'  => 'user_is_logged_in',
+    'access callback'  => 'drop_suite_meeting_access',
     'file'             => 'drop_suite.pages.inc',
     'type'             => MENU_CALLBACK,
   );
@@ -1487,7 +1517,7 @@ function drop_suite_menu() {
     'title'            => 'Postpone meeting item',
     'page callback'    => 'drop_suite_meeting_postpone',
     'page arguments'   => array(3),
-    'access callback'  => 'user_is_logged_in',
+    'access callback'  => 'drop_suite_meeting_access',
     'file'             => 'drop_suite.pages.inc',
     'type'             => MENU_CALLBACK,
   );
@@ -1710,7 +1740,7 @@ function drop_suite_drop_nav_links() {
       // via menu_get_item(), but stating the gate at the entry matches the
       // convention every other Drop Suite nav entry follows.
       'visible'    => user_is_logged_in(),
-      'hidden'     => !config_get('drop_suite.settings', 'meeting_enabled'),
+      'hidden'     => !drop_suite_meeting_enabled(),
       'icon'       => 'users-three',
     ),
     array(
