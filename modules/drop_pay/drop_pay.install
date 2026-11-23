@@ -1,0 +1,177 @@
+<?php
+/**
+ * @file
+ * Install / update hooks for Drop Pay.
+ */
+
+/**
+ * Implements hook_schema().
+ */
+function drop_pay_schema() {
+  $schema = array();
+
+  $schema['drop_payment'] = array(
+    'description' => 'Records of payments processed via drop_pay gateways. One row per payment intent — created on initiate, updated on confirm / refund / fail.',
+    'fields' => array(
+      'pid' => array(
+        'description' => 'Primary identifier for a payment.',
+        'type'        => 'serial',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ),
+      'amount' => array(
+        'description' => 'Payment amount in the listed currency, decimal.',
+        'type'        => 'numeric',
+        'precision'   => 10,
+        'scale'       => 2,
+        'not null'    => TRUE,
+        'default'     => 0,
+      ),
+      'currency' => array(
+        'description' => 'ISO 4217 currency code (USD, EUR, etc.).',
+        'type'        => 'varchar',
+        'length'      => 3,
+        'not null'    => TRUE,
+        'default'     => 'USD',
+      ),
+      'status' => array(
+        'description' => 'pending|completed|failed|refunded|cancelled.',
+        'type'        => 'varchar',
+        'length'      => 20,
+        'not null'    => TRUE,
+        'default'     => 'pending',
+      ),
+      'gateway' => array(
+        'description' => 'Gateway machine name: stripe, paypal, etc.',
+        'type'        => 'varchar',
+        'length'      => 64,
+        'not null'    => TRUE,
+        'default'     => '',
+      ),
+      'gateway_transaction_id' => array(
+        'description' => 'Gateway-side identifier (Stripe Checkout session ID, PayPal Order ID, etc.). Set by the gateway adapter.',
+        'type'        => 'varchar',
+        'length'      => 255,
+        'not null'    => FALSE,
+      ),
+      'cid' => array(
+        'description' => 'Optional CRM contact this payment is associated with.',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => FALSE,
+      ),
+      'purpose' => array(
+        'description' => 'Why this payment was made: dues, donation, event_ticket, etc.',
+        'type'        => 'varchar',
+        'length'      => 64,
+        'not null'    => TRUE,
+        'default'     => '',
+      ),
+      'purpose_entity_type' => array(
+        'description' => 'Entity type the payment funded (e.g. crm_membership_term).',
+        'type'        => 'varchar',
+        'length'      => 64,
+        'not null'    => FALSE,
+      ),
+      'purpose_entity_id' => array(
+        'description' => 'ID of the entity the payment funded.',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => FALSE,
+      ),
+      'description' => array(
+        'description' => 'Short human-readable label shown to the payer (line-item style).',
+        'type'        => 'varchar',
+        'length'      => 255,
+        'not null'    => TRUE,
+        'default'     => '',
+      ),
+      'metadata' => array(
+        'description' => 'Serialized array of gateway-specific extras (Stripe session URL, raw event payload, etc.).',
+        'type'        => 'blob',
+        'size'        => 'normal',
+        'not null'    => FALSE,
+        'serialize'   => TRUE,
+      ),
+      'created' => array(
+        'description' => 'Unix timestamp when the payment row was created (initiate).',
+        'type'        => 'int',
+        'not null'    => TRUE,
+        'default'     => 0,
+      ),
+      'changed' => array(
+        'description' => 'Unix timestamp when the payment row was last modified.',
+        'type'        => 'int',
+        'not null'    => TRUE,
+        'default'     => 0,
+      ),
+      'completed' => array(
+        'description' => 'Unix timestamp when the payment moved to completed (NULL while pending or failed).',
+        'type'        => 'int',
+        'not null'    => FALSE,
+      ),
+      'uid' => array(
+        'description' => 'User ID who initiated the payment (anonymous = 0).',
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+        'default'     => 0,
+      ),
+    ),
+    'primary key' => array('pid'),
+    'indexes' => array(
+      'cid'                 => array('cid'),
+      'status'              => array('status'),
+      'gateway'             => array('gateway'),
+      'purpose'             => array('purpose'),
+      'purpose_entity'      => array('purpose_entity_type', 'purpose_entity_id'),
+      'gateway_transaction' => array(array('gateway_transaction_id', 64)),
+      'created'             => array('created'),
+    ),
+  );
+
+  return $schema;
+}
+
+/**
+ * Implements hook_install().
+ */
+function drop_pay_install() {
+  _drop_pay_ensure_settings();
+}
+
+/**
+ * Makes sure drop_pay.settings has every setting, keeping existing values.
+ *
+ * Shared by hook_install() and the update hooks, so it is safe to re-run.
+ */
+function _drop_pay_ensure_settings() {
+  $config = config('drop_pay.settings');
+  $changed = FALSE;
+  if ($config->get('default_gateway') === NULL) {
+    $config->set('default_gateway', '');
+    $changed = TRUE;
+  }
+  $methods = $config->get('manual_methods');
+  if (!is_array($methods) || empty($methods)) {
+    $config->set('manual_methods', _drop_pay_default_manual_methods());
+    $changed = TRUE;
+  }
+  if ($changed) {
+    $config->save();
+  }
+}
+
+/**
+ * Adds the offline payment methods setting.
+ */
+function drop_pay_update_1100() {
+  _drop_pay_ensure_settings();
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function drop_pay_uninstall() {
+  config('drop_pay.settings')->delete();
+}

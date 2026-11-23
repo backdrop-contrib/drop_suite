@@ -1,0 +1,106 @@
+<?php
+/**
+ * @file
+ * Fake gateway used by drop_pay.test — captures every invocation in state
+ * so assertions can inspect the call.
+ */
+
+/**
+ * Implements hook_drop_pay_gateways().
+ */
+function drop_pay_test_gateway_drop_pay_gateways() {
+  return array(
+    'test' => array(
+      'label'    => t('Test gateway'),
+      'initiate' => 'drop_pay_test_gateway_initiate',
+      'confirm'  => 'drop_pay_test_gateway_confirm',
+      'refund'   => 'drop_pay_test_gateway_refund',
+      'expire'   => 'drop_pay_test_gateway_expire',
+    ),
+  );
+}
+
+/**
+ * Initiate — echo the request into state, return a dummy redirect URL.
+ *
+ * A test can toggle state 'drop_pay_test_gateway:fail_initiate' to force a
+ * thrown exception, or 'drop_pay_test_gateway:no_redirect' to simulate a
+ * gateway that returned no URL.
+ */
+function drop_pay_test_gateway_initiate($payment, $request) {
+  $calls = state_get('drop_pay_test_gateway:initiate_calls', 0);
+  state_set('drop_pay_test_gateway:initiate_calls', $calls + 1);
+  state_set('drop_pay_test_gateway:last_initiate', array(
+    'pid'     => $payment->pid,
+    'amount'  => $payment->amount,
+    'request' => $request,
+  ));
+
+  if (state_get('drop_pay_test_gateway:fail_initiate', FALSE)) {
+    throw new Exception('Forced failure from test gateway.');
+  }
+  if (state_get('drop_pay_test_gateway:no_redirect', FALSE)) {
+    return array();
+  }
+
+  $payment->gateway_transaction_id = 'test_txn_' . $payment->pid;
+  $payment->save();
+
+  return array('redirect_url' => 'https://example.test/checkout/' . $payment->pid);
+}
+
+/**
+ * Confirm — returns whatever 'drop_pay_test_gateway:confirm_result' says.
+ *
+ * Default TRUE so the happy path works without flipping state.
+ */
+function drop_pay_test_gateway_confirm($payment) {
+  $calls = state_get('drop_pay_test_gateway:confirm_calls', 0);
+  state_set('drop_pay_test_gateway:confirm_calls', $calls + 1);
+  state_set('drop_pay_test_gateway:last_confirm_pid', $payment->pid);
+  if (state_get('drop_pay_test_gateway:confirm_fails', FALSE)) {
+    throw new Exception('Forced failure from test gateway confirm.');
+  }
+  return (bool) state_get('drop_pay_test_gateway:confirm_result', TRUE);
+}
+
+/**
+ * Expire — counts calls; throws when 'drop_pay_test_gateway:expire_fails' is set.
+ */
+function drop_pay_test_gateway_expire($payment) {
+  $calls = state_get('drop_pay_test_gateway:expire_calls', 0);
+  state_set('drop_pay_test_gateway:expire_calls', $calls + 1);
+  if (state_get('drop_pay_test_gateway:expire_fails', FALSE)) {
+    throw new Exception('Forced failure from test gateway expire.');
+  }
+  return TRUE;
+}
+
+/**
+ * Refund — always succeeds, records the amount.
+ */
+function drop_pay_test_gateway_refund($payment, $amount = NULL) {
+  $calls = state_get('drop_pay_test_gateway:refund_calls', 0);
+  state_set('drop_pay_test_gateway:refund_calls', $calls + 1);
+  state_set('drop_pay_test_gateway:last_refund', array(
+    'pid'    => $payment->pid,
+    'amount' => $amount,
+  ));
+  return TRUE;
+}
+
+/**
+ * Implements hook_drop_pay_payment_status().
+ *
+ * Counts invocations so tests can verify the consumer hook fires on every
+ * state transition.
+ */
+function drop_pay_test_gateway_drop_pay_payment_status($payment, $previous_status) {
+  $log = state_get('drop_pay_test_gateway:status_log', array());
+  $log[] = array(
+    'pid'      => $payment->pid,
+    'previous' => $previous_status,
+    'new'      => $payment->status,
+  );
+  state_set('drop_pay_test_gateway:status_log', $log);
+}

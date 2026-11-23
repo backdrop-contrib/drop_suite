@@ -1,0 +1,323 @@
+<?php
+/**
+ * @file
+ * Tests for Drop Pay. Use the drop_pay_test_gateway helper module to avoid
+ * hitting any real payment service.
+ */
+
+/**
+ * Shared setup: enable drop_pay + the test gateway, make 'test' default.
+ */
+abstract class DropPayTestBase extends BackdropWebTestCase {
+
+  public function setUp() {
+    $modules = array('drop_pay', 'drop_pay_test_gateway', 'entity_plus');
+    parent::setUp($modules);
+
+    config_set('drop_pay.settings', 'default_gateway', 'test');
+    // Flush the gateway static cache so the newly enabled hook is visible.
+    backdrop_static_reset('drop_pay_get_gateways');
+
+    // Reset test-gateway state between cases.
+    state_del('drop_pay_test_gateway:initiate_calls');
+    state_del('drop_pay_test_gateway:confirm_calls');
+    state_del('drop_pay_test_gateway:refund_calls');
+    state_del('drop_pay_test_gateway:last_initiate');
+    state_del('drop_pay_test_gateway:last_confirm_pid');
+    state_del('drop_pay_test_gateway:last_refund');
+    state_del('drop_pay_test_gateway:status_log');
+    state_del('drop_pay_test_gateway:confirm_result');
+    state_del('drop_pay_test_gateway:fail_initiate');
+    state_del('drop_pay_test_gateway:no_redirect');
+  }
+
+}
+
+/**
+ * Verifies drop_pay_charge creates a payment row and dispatches correctly.
+ */
+class DropPayDispatchTest extends DropPayTestBase {
+
+  public function testHappyPath() {
+    $result = drop_pay_charge(array(
+      'amount'      => 25.00,
+      'description' => 'Test dues',
+      'purpose'     => 'dues',
+    ));
+
+    $this->assertTrue(!empty($result['pid']), 'drop_pay_charge returns a pid.');
+    $this->assertEqual($result['redirect_url'], 'https://example.test/checkout/' . $result['pid'], 'Returns the gateway redirect URL.');
+
+    $payment = drop_payment_load($result['pid']);
+    $this->assertEqual($payment->status, 'pending', 'Payment starts in pending.');
+    $this->assertEqual($payment->gateway, 'test', 'Gateway machine name stored.');
+    $this->assertEqual((float) $payment->amount, 25.00, 'Amount stored verbatim.');
+    $this->assertEqual($payment->gateway_transaction_id, 'test_txn_' . $payment->pid, 'Test gateway stamped gateway_transaction_id via $payment->save() inside initiate.');
+
+    $this->assertEqual(state_get('drop_pay_test_gateway:initiate_calls', 0), 1, 'Gateway initiate called once.');
+    $call = state_get('drop_pay_test_gateway:last_initiate');
+    $this->assertEqual($call['request']['purpose'], 'dues', 'Original request passed through to gateway.');
+  }
+
+  public function testMissingAmount() {
+    $result = drop_pay_charge(array('description' => 'No amount'));
+    $this->assertTrue(!empty($result['error']), 'Missing amount produces an error.');
+    $this->assertEqual(state_get('drop_pay_test_gateway:initiate_calls', 0), 0, 'Gateway is not called when validation fails.');
+  }
+
+  public function testNoGateway() {
+    config_set('drop_pay.settings', 'default_gateway', '');
+    $result = drop_pay_charge(array('amount' => 10, 'description' => 'x'));
+    $this->assertTrue(!empty($result['error']), 'No gateway configured produces an error.');
+  }
+
+  public function testInitiateException() {
+    state_set('drop_pay_test_gateway:fail_initiate', TRUE);
+    $result = drop_pay_charge(array('amount' => 10, 'description' => 'Throws'));
+
+    $this->assertTrue(!empty($result['error']), 'Thrown exception bubbles up as an error.');
+    $this->assertTrue(!empty($result['pid']), 'Payment row was still created so it can be audited.');
+    $payment = drop_payment_load($result['pid']);
+    $this->assertEqual($payment->status, 'failed', 'Payment is marked failed when initiate throws.');
+  }
+
+  public function testNoRedirectUrl() {
+    state_set('drop_pay_test_gateway:no_redirect', TRUE);
+    $result = drop_pay_charge(array('amount' => 10, 'description' => 'Empty'));
+
+    $this->assertTrue(!empty($result['error']), 'Empty gateway response produces an error.');
+    $payment = drop_payment_load($result['pid']);
+    $this->assertEqual($payment->status, 'failed', 'Payment is marked failed when gateway returns no redirect_url.');
+  }
+}
+
+/**
+ * Verifies drop_pay_set_status semantics.
+ */
+class DropPayStatusTest extends DropPayTestBase {
+
+  public function testTransitionFiresConsumerHook() {
+    $result = drop_pay_charge(array('amount' => 5, 'description' => 'Status test'));
+    $payment = drop_payment_load($result['pid']);
+
+    // Reset the status log from the implicit initial save.
+    state_del('drop_pay_test_gateway:status_log');
+
+    drop_pay_set_status($payment, 'completed');
+    $log = state_get('drop_pay_test_gateway:status_log', array());
+    $this->assertEqual(count($log), 1, 'Consumer hook fires on transition.');
+    $this->assertEqual($log[0]['previous'], 'pending', 'Previous status is passed to consumer.');
+    $this->assertEqual($log[0]['new'], 'completed', 'New status reflected in consumer.');
+
+    $reloaded = drop_payment_load($payment->pid);
+    $this->assertEqual($reloaded->status, 'completed', 'Status persisted to DB.');
+    $this->assertTrue(!empty($reloaded->completed), 'Completed timestamp stamped.');
+  }
+
+  public function testMetadataMerge() {
+    $result = drop_pay_charge(array('amount' => 5, 'description' => 'Meta test'));
+    $payment = drop_payment_load($result['pid']);
+
+    drop_pay_set_status($payment, 'completed', array('foo' => 'bar'));
+    $reloaded = drop_payment_load($payment->pid);
+    $meta = is_array($reloaded->metadata) ? $reloaded->metadata : array();
+    $this->assertEqual($meta['foo'], 'bar', 'Metadata merge adds new keys.');
+  }
+
+  public function testNoTransitionNoHook() {
+    $result = drop_pay_charge(array('amount' => 5, 'description' => 'Noop'));
+    $payment = drop_payment_load($result['pid']);
+    state_del('drop_pay_test_gateway:status_log');
+
+    drop_pay_set_status($payment, 'pending');
+    $log = state_get('drop_pay_test_gateway:status_log', array());
+    $this->assertEqual(count($log), 0, 'Same-status call without metadata does not fire the hook.');
+  }
+}
+
+/**
+ * Verifies the /drop/pay/return/{pid} page callback.
+ */
+class DropPayReturnPageTest extends DropPayTestBase {
+
+  public function testReturnConfirmsSuccess() {
+    module_load_include('inc', 'drop_pay', 'drop_pay.pages');
+
+    $result = drop_pay_charge(array('amount' => 15, 'description' => 'Return test'));
+    $payment = drop_payment_load($result['pid']);
+
+    // Happy path: confirm returns TRUE.
+    state_set('drop_pay_test_gateway:confirm_result', TRUE);
+    $build = drop_pay_return_page($payment);
+    $this->assertTrue(is_array($build), 'Return page renders when there is no return_path.');
+
+    $reloaded = drop_payment_load($payment->pid);
+    $this->assertEqual($reloaded->status, 'completed', 'Return page confirmed + completed the payment.');
+    $this->assertEqual(state_get('drop_pay_test_gateway:confirm_calls', 0), 1, 'Confirm called exactly once.');
+  }
+
+  public function testReturnLeavesPendingWhenUnsure() {
+    module_load_include('inc', 'drop_pay', 'drop_pay.pages');
+
+    $result = drop_pay_charge(array('amount' => 15, 'description' => 'Pending'));
+    $payment = drop_payment_load($result['pid']);
+
+    state_set('drop_pay_test_gateway:confirm_result', FALSE);
+    drop_pay_return_page($payment);
+
+    $reloaded = drop_payment_load($payment->pid);
+    $this->assertEqual($reloaded->status, 'pending', 'Unsure confirm leaves payment pending (webhook is expected to finalize).');
+  }
+
+  public function testReturnSkipsConfirmWhenAlreadyTerminal() {
+    module_load_include('inc', 'drop_pay', 'drop_pay.pages');
+
+    $result = drop_pay_charge(array('amount' => 15, 'description' => 'Terminal'));
+    $payment = drop_payment_load($result['pid']);
+    drop_pay_set_status($payment, 'completed');
+    state_del('drop_pay_test_gateway:confirm_calls');
+
+    drop_pay_return_page(drop_payment_load($payment->pid));
+    $this->assertEqual(state_get('drop_pay_test_gateway:confirm_calls', 0), 0, 'Confirm is not re-invoked for a terminal payment.');
+  }
+}
+
+/**
+ * Settings live at drop/pay/settings, with a card on drop/settings.
+ */
+class DropPaySettingsLocationTest extends DropPayTestBase {
+
+  /**
+   * The settings card exists and the settings page loads.
+   */
+  public function testSettingsLocation() {
+    $info = module_invoke('drop_pay', 'drop_settings_info');
+    $this->assertEqual($info['drop_pay']['path'], 'drop/pay/settings', 'The settings card points to drop/pay/settings.');
+
+    $admin = $this->backdropCreateUser(array('administer drop_pay', 'view drop_pay payments'));
+    $this->backdropLogin($admin);
+
+    $this->backdropGet('drop/pay/settings');
+    $this->assertResponse(200);
+
+    $this->backdropGet('drop/pay/settings/payments');
+    $this->assertResponse(200);
+  }
+
+}
+
+/**
+ * Offline payments: drop_pay_record_payment(), the form and refunds.
+ */
+class DropPayManualPaymentTest extends DropPayTestBase {
+
+  /**
+   * A recorded payment is completed, keeps its details and fires the hook.
+   */
+  public function testRecordPayment() {
+    $paid = REQUEST_TIME - 86400 * 3;
+    $result = drop_pay_record_payment(array(
+      'amount'              => 40,
+      'description'         => 'Dues paid at the meeting',
+      'method'              => 'check',
+      'reference'           => ' 1042 ',
+      'paid_date'           => $paid,
+      'purpose'             => 'dues',
+      'purpose_entity_type' => 'test_thing',
+      'purpose_entity_id'   => 7,
+    ));
+    $this->assertTrue(!empty($result['pid']), 'drop_pay_record_payment returns a pid.');
+
+    $payment = drop_payment_load($result['pid']);
+    $this->assertEqual($payment->status, 'completed', 'An offline payment is completed straight away.');
+    $this->assertEqual($payment->gateway, DROP_PAY_MANUAL, 'The gateway is stored as manual.');
+    $this->assertEqual($payment->metadata['method'], 'check', 'The method is stored in metadata.');
+    $this->assertEqual($payment->metadata['reference'], '1042', 'The reference is stored, trimmed.');
+    $this->assertEqual((int) $payment->completed, $paid, 'The completed date is the date the money was received.');
+    $this->assertEqual($payment->purpose_entity_type, 'test_thing', 'The purpose entity is stored.');
+    $this->assertEqual(drop_pay_payment_method_label($payment), 'Offline: Check', 'The method label reads "Offline: Check".');
+
+    $log = state_get('drop_pay_test_gateway:status_log', array());
+    $this->assertEqual(count($log), 1, 'hook_drop_pay_payment_status fired once.');
+    $this->assertEqual($log[0]['previous'], 'pending', 'The hook reports the previous status as pending.');
+    $this->assertEqual($log[0]['new'], 'completed', 'The hook reports the new status as completed.');
+    $this->assertEqual(state_get('drop_pay_test_gateway:initiate_calls', 0), 0, 'No gateway was called.');
+  }
+
+  /**
+   * Bad input is rejected without creating a payment.
+   */
+  public function testRecordPaymentValidation() {
+    $result = drop_pay_record_payment(array('amount' => 10, 'description' => 'X', 'method' => 'bitcoin'));
+    $this->assertTrue(!empty($result['error']), 'An unknown method is rejected.');
+    $result = drop_pay_record_payment(array('amount' => 0, 'description' => 'X', 'method' => 'cash'));
+    $this->assertTrue(!empty($result['error']), 'A zero amount is rejected.');
+    $count = db_query('SELECT COUNT(*) FROM {drop_payment}')->fetchField();
+    $this->assertEqual($count, 0, 'No payment rows were created.');
+    $this->assertFalse(isset(drop_pay_get_gateways()[DROP_PAY_MANUAL]), 'manual is never listed as a gateway.');
+  }
+
+  /**
+   * Staff record a payment on the form, see it listed and mark it refunded.
+   */
+  public function testRecordFormAndRefund() {
+    $admin = $this->backdropCreateUser(array('administer drop_pay', 'view drop_pay payments'));
+    $this->backdropLogin($admin);
+
+    $this->backdropPost('drop/pay/settings/payments/record', array(
+      'amount'      => '25.50',
+      'description' => 'Annual dues, Jane Smith',
+      'method'      => 'cash',
+      'reference'   => 'Receipt 88',
+      'paid_date'   => format_date(REQUEST_TIME, 'custom', 'Y-m-d', date_default_timezone()),
+    ), t('Record payment'));
+    $this->assertText('recorded', 'The form confirms the payment was recorded.');
+
+    $pid = db_query('SELECT MAX(pid) FROM {drop_payment}')->fetchField();
+    $payment = drop_payment_load($pid);
+    $this->assertEqual($payment->status, 'completed', 'The form created a completed payment.');
+    $this->assertEqual((float) $payment->amount, 25.50, 'The amount was stored.');
+    $this->assertText('Receipt 88', 'The payment page shows the reference.');
+    $this->assertText('Offline: Cash', 'The payment page shows the method.');
+
+    $this->backdropGet('drop/pay/settings/payments');
+    $this->assertText('Offline: Cash', 'The payment list shows the method.');
+
+    $this->backdropPost('drop/pay/settings/payment/' . $pid, array(), t('Mark as refunded'));
+    $this->assertText('marked as refunded', 'The page confirms the refund.');
+    // The refund happened in the child request; drop this process's copy.
+    entity_get_controller('drop_payment')->resetCache(array($pid));
+    $payment = drop_payment_load($pid);
+    $this->assertEqual($payment->status, 'refunded', 'The offline payment is marked refunded.');
+    $this->assertEqual(state_get('drop_pay_test_gateway:refund_calls', 0), 0, 'No gateway refund was attempted.');
+    $this->assertRaw('<td>' . t('Refunded') . '</td>', 'The payment page shows when it was refunded.');
+    $this->assertText('Technical details', 'Administrators see the technical details section.');
+    $this->assertRaw('<details', 'The raw metadata sits in a collapsible details element.');
+
+    $this->backdropPost('drop/pay/settings/payments/record', array(
+      'amount'      => '-5',
+      'description' => 'Bad',
+      'method'      => 'cash',
+      'paid_date'   => '2026-01-01',
+    ), t('Record payment'));
+    $this->assertText('greater than zero', 'A negative amount is refused on the form.');
+  }
+
+  /**
+   * The offline methods list is editable on the settings page.
+   */
+  public function testMethodsSetting() {
+    $admin = $this->backdropCreateUser(array('administer drop_pay', 'view drop_pay payments'));
+    $this->backdropLogin($admin);
+
+    $this->backdropPost('drop/pay/settings', array(
+      'manual_methods' => "cash|Cash\nVenmo\ncheck|Cheque",
+    ), t('Save configuration'));
+    $methods = config_get('drop_pay.settings', 'manual_methods');
+    $this->assertEqual($methods, array('cash' => 'Cash', 'venmo' => 'Venmo', 'check' => 'Cheque'), 'Methods are saved as a keyed list; a bare label gets a key.');
+
+    $this->backdropPost('drop/pay/settings', array('manual_methods' => "manual|Oops"), t('Save configuration'));
+    $this->assertText('is reserved', 'The reserved key manual is refused.');
+  }
+
+}

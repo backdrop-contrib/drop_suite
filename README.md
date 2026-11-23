@@ -16,6 +16,8 @@ Drop Suite ships as a single contrib project containing a parent module and a cu
 | **Drop CRM Membership** *(submodule, deprecated)* | Older membership tracking built into Drop CRM. Kept for now but no longer developed: use Drop Membership Entity for new sites. | `drop/crm/memberships` | drop_crm |
 | **Drop Docs** | Hierarchical team wiki/documentation built on Backdrop's Book module. | `drop/docs` | drop_suite, book |
 | **Drop Files** | Team file sharing library with tag-based organization. | `drop/files` | drop_suite, taxonomy |
+| **Drop Pay** | Payments for Drop Suite modules: a payment record, online checkout through a gateway (Stripe included), offline payments (cash, check) and refunds. Other modules start payments and react when one completes. | `drop/pay/settings/payments` | entity_plus |
+| **Drop Pay Stripe** *(submodule)* | Stripe Checkout gateway for Drop Pay. | `drop/pay/settings/gateway/stripe` | drop_pay, stripe |
 | **Drop Membership Entity** | Memberships for Drop Suite, built on the contrib Membership Entity module: Drop Suite pages and navigation, a price for each term length, and online join and renewal payments through Drop Pay (optional). | `drop/memberships` | drop_suite, membership_entity, membership_entity_term |
 
 The project also ships the **Drop Suite layout** (bundled inside the parent module) — a full-width application layout used for `/drop/*` pages.
@@ -35,7 +37,7 @@ The project also ships the **Drop Suite layout** (bundled inside the parent modu
 - [Entity UI](https://github.com/backdrop-contrib/entity_ui) — required by Drop CRM
 - [Entity Reference](https://github.com/backdrop-contrib/entityreference) — required by Drop CRM
 - [Membership Entity](https://github.com/backdrop-contrib/membership_entity) 1.x-1.2.3 or later — required by Drop Membership Entity
-- Drop Pay — optional, for membership prices and payments. It is still in Drop Suite Lab, not in this project.
+- [Stripe](https://github.com/backdrop-contrib/stripe) — required by Drop Pay Stripe
 
 Backdrop core's **Book** module is required by Drop Docs (already in core, just needs enabling). **Taxonomy** is required by Drop Files (also core).
 
