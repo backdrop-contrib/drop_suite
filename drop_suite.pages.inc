@@ -175,11 +175,12 @@ function drop_suite_meeting_page() {
     return '<p>' . t('No "Meeting" tag exists yet. Tag a task or ticket with "Meeting" to start building your agenda.') . '</p>';
   }
 
-  // Load postponed items for the current user.
+  // Load postponed items (site-wide: one list shared by everyone).
   $postponed = state_get('drop_meeting_postponed', array());
   $now = REQUEST_TIME;
 
   $items = array();
+  $hidden = array();
 
   // Gather tasks tagged "Meeting".
   if (module_exists('droptasks')) {
@@ -193,10 +194,9 @@ function drop_suite_meeting_page() {
     $result = $query->execute();
     foreach ($result as $row) {
       $key = 'drop_task-' . $row->tid;
-      if (isset($postponed[$key]) && $postponed[$key] > $now) {
-        continue;
-      }
-      $items[] = array(
+      $is_postponed = isset($postponed[$key]) && $postponed[$key] > $now;
+      $target = $is_postponed ? 'hidden' : 'items';
+      ${$target}[] = array(
         'type'        => 'task',
         'id'          => $row->tid,
         'entity_type' => 'drop_task',
@@ -247,12 +247,11 @@ function drop_suite_meeting_page() {
 
     foreach ($rows as $row) {
       $key = 'drop_ticket-' . $row->tid;
-      if (isset($postponed[$key]) && $postponed[$key] > $now) {
-        continue;
-      }
+      $is_postponed = isset($postponed[$key]) && $postponed[$key] > $now;
       $prefix = isset($prefixes[$row->pid]) ? $prefixes[$row->pid] : '';
       $ticket_label = $prefix ? $prefix . '-' . $row->ticket_number : '#' . $row->ticket_number;
-      $items[] = array(
+      $target = $is_postponed ? 'hidden' : 'items';
+      ${$target}[] = array(
         'type'        => 'ticket',
         'id'          => $row->tid,
         'entity_type' => 'drop_ticket',
@@ -266,17 +265,21 @@ function drop_suite_meeting_page() {
     }
   }
 
-  if (empty($items)) {
+  $token = backdrop_get_token('drop_meeting');
+
+  if (empty($items) && empty($hidden)) {
     return '<p>' . t('No agenda items. Tag a task or ticket with "Meeting" and it will appear here.') . '</p>';
   }
 
   // Render the agenda.
   $output = '';
+  if (empty($items)) {
+    $output .= '<p>' . t('No agenda items right now. Everything tagged "Meeting" is postponed.') . '</p>';
+  }
 
   // Separate by type.
   $tasks   = array_filter($items, function($i) { return $i['type'] === 'task'; });
   $tickets = array_filter($items, function($i) { return $i['type'] === 'ticket'; });
-  $token = backdrop_get_token('drop_meeting');
 
   if ($tasks) {
     $output .= '<h3>' . t('Tasks') . '</h3>';
@@ -294,6 +297,29 @@ function drop_suite_meeting_page() {
       $output .= _drop_suite_meeting_item_row($item, $token);
     }
     $output .= '</div>';
+  }
+
+  // Postponed items, each with an Undo link that puts it back on the agenda.
+  if ($hidden) {
+    $output .= '<details class="drop-meeting-postponed">';
+    $output .= '<summary>' . t('Postponed (@count)', array('@count' => count($hidden))) . '</summary>';
+    $output .= '<div class="drop-meeting-items drop-meeting-items--postponed">';
+    foreach ($hidden as $item) {
+      $entity_key = $item['entity_type'] . '-' . $item['id'];
+      $undo_url = url('drop/meeting/unpostpone/' . $entity_key, array(
+        'query' => array('token' => $token),
+      ));
+      $until = $postponed[$entity_key];
+      $output .= '<div class="drop-meeting-item drop-meeting-item--postponed">'
+        . '<span class="drop-meeting-type drop-meeting-type--' . $item['type'] . '">'
+        . ($item['type'] === 'ticket' ? check_plain($item['label']) : t('Task'))
+        . '</span>'
+        . '<span class="drop-meeting-title">' . l($item['title'], $item['path']) . '</span>'
+        . ' <span class="drop-meeting-due">' . t('Back on the agenda @date', array('@date' => format_date($until, 'short'))) . '</span>'
+        . '<span class="drop-meeting-actions"><a href="' . $undo_url . '" class="drop-meeting-action drop-meeting-action--undo">' . t('Undo') . '</a></span>'
+        . '</div>';
+    }
+    $output .= '</div></details>';
   }
 
   backdrop_add_css(backdrop_get_path('module', 'drop_suite') . '/drop_suite.meeting.css');
@@ -469,6 +495,34 @@ function drop_suite_meeting_postpone($entity_key) {
   state_set('drop_meeting_postponed', $postponed);
 
   backdrop_set_message(t('Postponed until next meeting.'));
+  backdrop_goto('drop/meeting');
+}
+
+/**
+ * Page callback: puts a postponed meeting agenda item back on the agenda.
+ *
+ * Path: drop/meeting/unpostpone/{entity_type}-{entity_id}
+ *
+ * @param string $entity_key
+ *   In the format "entity_type-entity_id", e.g. "drop_task-42".
+ */
+function drop_suite_meeting_unpostpone($entity_key) {
+  if (!isset($_GET['token']) || !backdrop_valid_token($_GET['token'], 'drop_meeting')) {
+    backdrop_access_denied();
+    return;
+  }
+
+  $parts = explode('-', $entity_key, 2);
+  if (count($parts) !== 2 || !in_array($parts[0], array('drop_task', 'drop_ticket'))) {
+    backdrop_not_found();
+    return;
+  }
+
+  $postponed = state_get('drop_meeting_postponed', array());
+  unset($postponed[$entity_key]);
+  state_set('drop_meeting_postponed', $postponed);
+
+  backdrop_set_message(t('Back on the meeting agenda.'));
   backdrop_goto('drop/meeting');
 }
 
