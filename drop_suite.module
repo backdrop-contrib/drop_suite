@@ -1525,7 +1525,7 @@ function drop_suite_menu() {
     'title'            => 'Undo postpone of meeting item',
     'page callback'    => 'drop_suite_meeting_unpostpone',
     'page arguments'   => array(3),
-    'access callback'  => 'user_is_logged_in',
+    'access callback'  => 'drop_suite_meeting_access',
     'file'             => 'drop_suite.pages.inc',
     'type'             => MENU_CALLBACK,
   );
