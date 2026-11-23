@@ -9,4 +9,4 @@ dependencies[] = drop_suite
 dependencies[] = membership_entity (>=1.x-1.2.3)
 dependencies[] = membership_entity_term (>=1.x-1.2.3)
 
-configure = drop/memberships
+configure = drop/memberships/settings
