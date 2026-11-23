@@ -247,8 +247,16 @@ function drop_crm_field_extra_fields() {
     ),
   );
 
+  // Organization roles: shown on both people and organizations, so it lives
+  // outside the shared list only where it applies (added below).
+
   // Person-specific display fields.
   $extra['crm_contact']['crm_person']['display'] = $shared_display;
+  $extra['crm_contact']['crm_person']['display']['org_links'] = array(
+    'label' => t('Organization roles'),
+    'description' => t('Organizations this person is linked to with a role other than employee.'),
+    'weight' => 14,
+  );
   $extra['crm_contact']['crm_person']['display']['hero'] = array(
     'label' => t('Hero section'),
     'description' => t('Rating, job title, employer, tags, and action links.'),
@@ -259,6 +267,11 @@ function drop_crm_field_extra_fields() {
   // Organizations have no Relationships section (relationships link people).
   $extra['crm_contact']['crm_organization']['display'] = $shared_display;
   unset($extra['crm_contact']['crm_organization']['display']['relationships']);
+  $extra['crm_contact']['crm_organization']['display']['org_links'] = array(
+    'label' => t('People with roles'),
+    'description' => t('Volunteers, board members and others linked to this organization.'),
+    'weight' => 5,
+  );
   $extra['crm_contact']['crm_organization']['display']['affiliated_contacts'] = array(
     'label' => t('Affiliated people'),
     'description' => t('People who list this organization as their employer.'),
@@ -751,6 +764,104 @@ function crm_activity_load($aid) {
  */
 function crm_activity_load_multiple($aids = array(), $conditions = array(), $reset = FALSE) {
   return entity_load('crm_activity', $aids, $conditions, $reset);
+}
+
+/**
+ * Returns the names of the default organization roles, in order.
+ *
+ * @return array
+ */
+function _drop_crm_default_org_link_roles() {
+  return array(
+    'Volunteer',
+    'Board member',
+    'Former staff',
+    'Consultant',
+    'Friend / supporter',
+  );
+}
+
+/**
+ * Returns the organization roles as tid => name, in vocabulary order.
+ *
+ * Roles are terms in the org_link_roles vocabulary, managed at
+ * admin/structure/taxonomy/org_link_roles.
+ *
+ * @return array
+ */
+function _drop_crm_org_link_role_options() {
+  $options = array();
+  if (taxonomy_vocabulary_machine_name_load('org_link_roles')) {
+    foreach (taxonomy_get_tree('org_link_roles') as $term) {
+      $options[(int) $term->tid] = $term->name;
+    }
+  }
+  return $options;
+}
+
+/**
+ * Loads one person-to-organization link by ID.
+ *
+ * @param int $lid
+ *
+ * @return object|false
+ */
+function crm_org_link_load($lid) {
+  return db_select('crm_org_link', 'l')
+    ->fields('l')
+    ->condition('lid', (int) $lid)
+    ->execute()
+    ->fetchObject();
+}
+
+/**
+ * Loads role links for a person or an organization.
+ *
+ * @param int $cid
+ *   The contact ID.
+ * @param string $side
+ *   'person' to load a person's links, 'org' to load an organization's.
+ *
+ * @return array
+ *   Link rows, each with an added 'other_cid' property, oldest first.
+ */
+function _drop_crm_load_org_links($cid, $side = 'person') {
+  $column = $side === 'org' ? 'cid_org' : 'cid_person';
+  $rows = db_select('crm_org_link', 'l')
+    ->fields('l')
+    ->condition($column, (int) $cid)
+    ->orderBy('lid')
+    ->execute()
+    ->fetchAll();
+  foreach ($rows as $row) {
+    $row->other_cid = (int) ($side === 'org' ? $row->cid_person : $row->cid_org);
+  }
+  return $rows;
+}
+
+/**
+ * Implements hook_entity_delete().
+ *
+ * Removes role links that point at a deleted contact.
+ */
+function drop_crm_entity_delete($entity, $type) {
+  if ($type === 'crm_contact' && !empty($entity->cid) && db_table_exists('crm_org_link')) {
+    db_delete('crm_org_link')
+      ->condition(db_or()
+        ->condition('cid_person', $entity->cid)
+        ->condition('cid_org', $entity->cid))
+      ->execute();
+  }
+}
+
+/**
+ * Autocomplete callback: organizations only.
+ *
+ * @param string $string
+ *   The partial string typed by the person.
+ */
+function drop_crm_organization_autocomplete($string = '') {
+  backdrop_json_output(_drop_crm_contact_autocomplete_matches($string, 'crm_organization'));
 }
 
 /**
@@ -1274,6 +1385,41 @@ function drop_crm_menu() {
     'access callback'  => 'user_access',
     'access arguments' => array('edit crm contacts'),
     'file'             => 'drop_crm.admin.inc',
+    'type'             => MENU_CALLBACK,
+  );
+
+  // Person-to-organization role links (volunteer, board member, ...).
+  $items['drop/crm/org-links/add'] = array(
+    'title'            => 'Add organization role',
+    'page callback'    => 'backdrop_get_form',
+    'page arguments'   => array('drop_crm_org_link_form'),
+    'access callback'  => 'user_access',
+    'access arguments' => array('edit crm contacts'),
+    'file'             => 'drop_crm.admin.inc',
+    'type'             => MENU_CALLBACK,
+  );
+  $items['drop/crm/org-links/%/edit'] = array(
+    'title'            => 'Edit organization role',
+    'page callback'    => 'backdrop_get_form',
+    'page arguments'   => array('drop_crm_org_link_form', 3),
+    'access callback'  => 'user_access',
+    'access arguments' => array('edit crm contacts'),
+    'file'             => 'drop_crm.admin.inc',
+    'type'             => MENU_CALLBACK,
+  );
+  $items['drop/crm/org-links/%/delete'] = array(
+    'title'            => 'Remove organization role',
+    'page callback'    => 'backdrop_get_form',
+    'page arguments'   => array('drop_crm_org_link_delete_confirm', 3),
+    'access callback'  => 'user_access',
+    'access arguments' => array('edit crm contacts'),
+    'file'             => 'drop_crm.admin.inc',
+    'type'             => MENU_CALLBACK,
+  );
+  $items['drop/crm/autocomplete/organizations'] = array(
+    'title'            => 'Organization autocomplete',
+    'page callback'    => 'drop_crm_organization_autocomplete',
+    'access arguments' => array('access crm'),
     'type'             => MENU_CALLBACK,
   );
 

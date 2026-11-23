@@ -310,6 +310,59 @@ function drop_crm_schema() {
     ),
   );
 
+  $schema['crm_org_link'] = array(
+    'description' => 'Links a person to an organization with a role (volunteer, board member, ...). Employer stays in field_crm_employer.',
+    'fields' => array(
+      'lid' => array(
+        'description' => 'Primary key.',
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'cid_person' => array(
+        'description' => 'crm_contact.cid of the person.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'cid_org' => array(
+        'description' => 'crm_contact.cid of the organization.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'role_tid' => array(
+        'description' => 'Term ID in the org_link_roles vocabulary (Volunteer, Board member, ...).',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'notes' => array(
+        'description' => 'Optional free-text note about this link.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'created' => array(
+        'description' => 'Unix timestamp when the link was created.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+    ),
+    'primary key' => array('lid'),
+    'unique keys' => array(
+      'person_org_role' => array('cid_person', 'cid_org', 'role_tid'),
+    ),
+    'indexes' => array(
+      'cid_org' => array('cid_org'),
+    ),
+  );
+
   return $schema;
 }
 
@@ -325,6 +378,7 @@ function drop_crm_install() {
   _drop_crm_ensure_contact_types();
   _drop_crm_ensure_contact_groups();
   _drop_crm_ensure_client_through();
+  _drop_crm_ensure_org_links();
 
   module_load_include('inc', 'drop_crm', 'drop_crm.admin');
   $config = config('drop_crm.settings');
@@ -2276,4 +2330,46 @@ function _drop_crm_client_through_view_field() {
     'settings' => array('link' => 1),
     'empty' => '',
   );
+}
+
+/**
+ * Creates the crm_org_link table and the org_link_roles vocabulary.
+ *
+ * Roles are taxonomy terms so site architects manage them with the standard
+ * term screens. Safe to call repeatedly; used by hook_install() and update
+ * 1038. Terms are only seeded when the vocabulary is first created, so terms
+ * a site has renamed or removed do not come back.
+ */
+function _drop_crm_ensure_org_links() {
+  if (!db_table_exists('crm_org_link')) {
+    $schema = drop_crm_schema();
+    db_create_table('crm_org_link', $schema['crm_org_link']);
+  }
+
+  if (taxonomy_vocabulary_machine_name_load('org_link_roles')) {
+    return;
+  }
+  $vocab = new TaxonomyVocabulary(array(
+    'name'         => 'Organization Roles',
+    'machine_name' => 'org_link_roles',
+    'description'  => 'Roles a person can have at an organization without being staff, such as Volunteer or Board member.',
+  ));
+  taxonomy_vocabulary_save($vocab);
+
+  // parent must be set to [0] or the term overview page shows nothing.
+  foreach (_drop_crm_default_org_link_roles() as $weight => $name) {
+    taxonomy_term_save(new TaxonomyTerm(array(
+      'name'       => $name,
+      'vocabulary' => 'org_link_roles',
+      'parent'     => array(0),
+      'weight'     => $weight,
+    )));
+  }
+}
+
+/**
+ * Add person-to-organization links with roles (volunteer, board member, ...).
+ */
+function drop_crm_update_1038() {
+  _drop_crm_ensure_org_links();
 }
