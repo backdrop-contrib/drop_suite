@@ -43,8 +43,8 @@ function drop_membership_entity_menu() {
     'title'            => 'Continue payment',
     'page callback'    => 'drop_membership_entity_continue_payment_page',
     'page arguments'   => array(1),
-    'access callback'  => 'membership_entity_access',
-    'access arguments' => array('view', 1),
+    'access callback'  => 'drop_membership_entity_continue_access',
+    'access arguments' => array(1),
     'type'             => MENU_CALLBACK,
     'file'             => 'drop_membership_entity.pages.inc',
   );
@@ -57,6 +57,12 @@ function drop_membership_entity_menu() {
     'type'             => MENU_CALLBACK,
     'file'             => 'drop_membership_entity.pages.inc',
   );
+  $items['drop/memberships/settings'] = array(
+    'title'            => 'Membership settings',
+    'page callback'    => 'drop_membership_entity_settings_redirect',
+    'access callback'  => 'drop_membership_entity_settings_access',
+    'type'             => MENU_CALLBACK,
+  );
   $items['drop/memberships/add'] = array(
     'title'            => 'Add a membership',
     'page callback'    => 'drop_membership_entity_add_page',
@@ -65,6 +71,54 @@ function drop_membership_entity_menu() {
     'type'             => MENU_LOCAL_ACTION,
   );
   return $items;
+}
+
+/**
+ * Access callback: membership/N/unfinished-payment/continue.
+ *
+ * Only the member can continue their own checkout. Staff who can see the
+ * membership may cancel an unfinished payment, but continuing would send
+ * them to the member's checkout to pay with their own card.
+ */
+function drop_membership_entity_continue_access($membership) {
+  global $user;
+  return !empty($membership->uid) && $membership->uid == $user->uid && membership_entity_access('view', $membership);
+}
+
+/**
+ * Returns the membership type settings page and the permission it needs.
+ *
+ * Membership Entity Type adds a page listing every type. Without it there is
+ * one type, configured at a fixed path that needs 'administer memberships'.
+ *
+ * @return array
+ *   An array with the keys 'path' and 'permission'.
+ */
+function _drop_membership_entity_settings_target() {
+  if (module_exists('membership_entity_type')) {
+    return array('path' => 'admin/memberships/types', 'permission' => 'administer membership types');
+  }
+  return array('path' => 'admin/memberships/types/manage/membership', 'permission' => 'administer memberships');
+}
+
+/**
+ * Access callback: drop/memberships/settings.
+ */
+function drop_membership_entity_settings_access() {
+  $target = _drop_membership_entity_settings_target();
+  return user_access($target['permission']);
+}
+
+/**
+ * Page callback: drop/memberships/settings.
+ *
+ * A fixed address for the membership type settings (the module's configure
+ * link and its Drop Suite settings card), sending people to wherever those
+ * settings are on this site.
+ */
+function drop_membership_entity_settings_redirect() {
+  $target = _drop_membership_entity_settings_target();
+  backdrop_goto($target['path']);
 }
 
 /**
@@ -119,16 +173,23 @@ function drop_membership_entity_cron() {
   if (!module_exists('drop_pay')) {
     return;
   }
+  // Work through the stale payments 50 at a time, carrying on after the last
+  // one handled. Payments the gateway can't settle yet stay pending; without
+  // the cursor, 50 of those would block every newer one forever.
+  $last_pid = (int) state_get('drop_membership_entity_cron_last_pid', 0);
   $pids = db_select('drop_payment', 'p')
     ->fields('p', array('pid'))
     ->condition('purpose', DROP_MEMBERSHIP_ENTITY_PURPOSE)
     ->condition('purpose_entity_type', 'membership_entity_term')
     ->condition('status', 'pending')
     ->condition('created', REQUEST_TIME - DROP_MEMBERSHIP_ENTITY_STALE_SECONDS, '<')
+    ->condition('pid', $last_pid, '>')
     ->orderBy('pid')
     ->range(0, 50)
     ->execute()
     ->fetchCol();
+  // A short batch means the end was reached: start from the top next time.
+  state_set('drop_membership_entity_cron_last_pid', count($pids) < 50 ? 0 : end($pids));
 
   foreach ($pids as $pid) {
     $payment = drop_payment_load($pid);
@@ -162,15 +223,13 @@ function drop_membership_entity_drop_nav_links() {
  * Implements hook_drop_settings_info().
  */
 function drop_membership_entity_drop_settings_info() {
-  $path = module_exists('membership_entity_type')
-    ? 'admin/memberships/types'
-    : 'admin/memberships/types/manage/membership';
+  $target = _drop_membership_entity_settings_target();
   return array(
     'drop_membership_entity' => array(
       'title'       => t('Memberships'),
       'description' => t('Membership types, term lengths and prices.'),
-      'path'        => $path,
-      'permission'  => 'administer membership types',
+      'path'        => 'drop/memberships/settings',
+      'permission'  => $target['permission'],
       'weight'      => 24,
     ),
   );
@@ -222,15 +281,24 @@ function _drop_membership_entity_pending_payment($membership) {
  */
 function _drop_membership_entity_unfinished_panel($membership, $payment) {
   $options = array('attributes' => array('class' => array('button')));
+  $args = array(
+    '@amount' => _drop_membership_entity_format_amount($payment->amount),
+    '@date'   => format_date($payment->created, 'short'),
+  );
+  $links = array();
+  if (drop_membership_entity_continue_access($membership)) {
+    $text = t('You started a payment of @amount on @date and have not finished it. Until it is paid or cancelled, this membership cannot be renewed.', $args);
+    $links[] = l(t('Continue payment'), 'membership/' . $membership->mid . '/unfinished-payment/continue', $options);
+  }
+  else {
+    // Staff looking at someone else's membership: only the member can pay.
+    $text = t('A payment of @amount was started on @date and has not been finished. Until the member pays or the payment is cancelled, this membership cannot be renewed.', $args);
+  }
+  $links[] = l(t('Cancel payment'), 'membership/' . $membership->mid . '/unfinished-payment/cancel', $options);
+
   return '<div class="messages warning drop-membership-entity-unfinished">'
-    . '<p>' . t('You started a payment of @amount on @date and have not finished it. Until it is paid or cancelled, this membership cannot be renewed.', array(
-      '@amount' => _drop_membership_entity_format_amount($payment->amount),
-      '@date'   => format_date($payment->created, 'short'),
-    )) . '</p>'
-    . '<p>'
-    . l(t('Continue payment'), 'membership/' . $membership->mid . '/unfinished-payment/continue', $options) . ' '
-    . l(t('Cancel payment'), 'membership/' . $membership->mid . '/unfinished-payment/cancel', $options)
-    . '</p></div>';
+    . '<p>' . $text . '</p>'
+    . '<p>' . implode(' ', $links) . '</p></div>';
 }
 
 // ---------------------------------------------------------------------------
@@ -280,6 +348,7 @@ function drop_membership_entity_membership_entity_settings_alter(&$form, &$form_
       '#field_prefix'     => '$',
       '#default_value'    => isset($prices[$length]) ? $prices[$length] : '',
       '#element_validate' => array('_drop_membership_entity_price_validate'),
+      '#term_length'      => $length,
     );
   }
 }
@@ -290,7 +359,7 @@ function drop_membership_entity_membership_entity_settings_alter(&$form, &$form_
 function _drop_membership_entity_price_validate($element, &$form_state) {
   $value = trim($element['#value']);
   if ($value !== '' && (!is_numeric($value) || $value < 0)) {
-    form_error($element, t('The price for %length must be a number, without a currency sign.', array('%length' => $element['#title'])));
+    form_error($element, t('The price for %length must be a number, without a currency sign.', array('%length' => $element['#term_length'])));
   }
 }
 
@@ -625,6 +694,15 @@ function drop_membership_entity_drop_pay_payment_status($payment, $previous_stat
   }
   $term = membership_entity_term_load($payment->purpose_entity_id, TRUE);
   if (!$term) {
+    // The term was deleted while the payment was open. Money that came in
+    // now pays for nothing, so leave staff a trace to refund or reconcile.
+    if (in_array($payment->status, array('completed', 'refunded'))) {
+      watchdog('drop_membership_entity', 'Payment #@pid is @status, but membership term @id no longer exists. Check the payment and refund or record the membership by hand.', array(
+        '@pid'    => $payment->pid,
+        '@status' => $payment->status,
+        '@id'     => $payment->purpose_entity_id,
+      ), WATCHDOG_WARNING);
+    }
     return;
   }
 

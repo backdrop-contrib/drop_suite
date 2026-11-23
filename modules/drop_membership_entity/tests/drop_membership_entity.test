@@ -56,6 +56,7 @@ abstract class DropMembershipEntityTestBase extends BackdropWebTestCase {
    */
   protected function setUp() {
     $modules = array(
+      'dblog',
       'entity_plus',
       'entity_ui',
       'views',
@@ -416,8 +417,9 @@ class DropMembershipEntityWithoutDropPayTest extends DropMembershipEntityTestBas
     $this->backdropGet('drop/memberships');
     $this->assertResponse(200, 'The memberships list loads.');
 
-    $this->backdropGet('admin/memberships/types/manage/membership');
-    $this->assertResponse(200, 'The membership type settings load.');
+    $this->backdropGet('drop/memberships/settings');
+    $this->assertResponse(200, 'drop/memberships/settings loads.');
+    $this->assertUrl('admin/memberships/types/manage/membership', array(), 'Without Membership Entity Type it leads to the one type\'s settings.');
     $this->assertNoText(t('Prices'), 'The type settings have no Prices fieldset.');
 
     $this->backdropGet('drop/memberships/add');
@@ -548,9 +550,10 @@ class DropMembershipEntityUnfinishedPaymentTest extends DropMembershipEntityTest
     $this->backdropLogin($admin);
 
     $this->backdropGet('membership/' . $membership->mid);
-    $this->assertText('have not finished it', 'The membership page explains the unfinished payment.');
-    $this->assertLink('Continue payment', 0, 'The membership page offers to continue.');
-    $this->assertLink('Cancel payment', 0, 'The membership page offers to cancel.');
+    $this->assertText('has not been finished', 'Staff see the unfinished payment described.');
+    $this->assertNoText('You started a payment', 'Staff are not told they started it.');
+    $this->assertNoLink('Continue payment', 'Staff are not offered the member\'s checkout.');
+    $this->assertLink('Cancel payment', 0, 'Staff can cancel the unfinished payment.');
 
     $this->backdropPost('membership/' . $membership->mid . '/unfinished-payment/cancel', array(), t('Cancel payment'));
     $this->assertText('The unfinished payment is cancelled.', 'Cancelling confirms on the next page.');
@@ -561,13 +564,22 @@ class DropMembershipEntityUnfinishedPaymentTest extends DropMembershipEntityTest
    * Continue sends the payer back to the checkout, unless it was paid.
    */
   public function testContinueSendsToCheckout() {
-    $account = $this->backdropCreateUser();
+    $account = $this->backdropCreateUser(array('membership view own membership'));
     list($membership, $term) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_PENDING);
     $payment = $this->startPayment($term);
     state_set('drop_pay_test_gateway:confirm_result', FALSE);
 
     $admin = $this->backdropCreateUser(array('administer memberships'));
     $this->backdropLogin($admin);
+    $this->backdropGet('membership/' . $membership->mid . '/unfinished-payment/continue');
+    $this->assertResponse(403, 'Staff cannot continue a member\'s checkout.');
+    $this->backdropLogout();
+
+    $this->backdropLogin($account);
+    $this->backdropGet('membership/' . $membership->mid);
+    $this->assertText('You started a payment', 'The member is told they started the payment.');
+    $this->assertLink('Continue payment', 0, 'The member is offered to continue.');
+    $this->assertLink('Cancel payment', 0, 'The member is offered to cancel.');
 
     $this->maximumRedirects = 0;
     $this->backdropGet('membership/' . $membership->mid . '/unfinished-payment/continue');
@@ -634,6 +646,47 @@ class DropMembershipEntityUnfinishedPaymentTest extends DropMembershipEntityTest
 
     $this->assertEqual(drop_payment_load($payment->pid)->status, 'pending', 'Nothing is cancelled while Stripe cannot be asked.');
     $this->assertEqual($this->reloadTerm($term->id)->status, MEMBERSHIP_ENTITY_PENDING, 'The term stays pending for the next run.');
+  }
+
+  /**
+   * Cron carries on after the last payment it handled, then starts over.
+   *
+   * Payments the gateway can't settle stay pending; they must not block
+   * newer stale payments.
+   */
+  public function testCronCursor() {
+    $account = $this->backdropCreateUser();
+    list($membership, $term) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_PENDING);
+    $payment = $this->startPayment($term);
+    db_update('drop_payment')->fields(array('created' => REQUEST_TIME - 2 * 86400))->condition('pid', $payment->pid)->execute();
+    state_set('drop_pay_test_gateway:confirm_result', FALSE);
+
+    // As if an earlier run stopped at a later payment.
+    state_set('drop_membership_entity_cron_last_pid', $payment->pid);
+    drop_membership_entity_cron();
+    $this->assertEqual(drop_payment_load($payment->pid)->status, 'pending', 'Payments before the cursor wait for the next pass.');
+    $this->assertEqual(state_get('drop_membership_entity_cron_last_pid'), 0, 'A short batch sends the cursor back to the start.');
+
+    drop_membership_entity_cron();
+    $this->assertEqual(drop_payment_load($payment->pid)->status, 'cancelled', 'The next pass reaches the payment.');
+  }
+
+  /**
+   * A payment that completes after its term was deleted leaves a warning.
+   */
+  public function testCompletedPaymentForDeletedTermIsLogged() {
+    $account = $this->backdropCreateUser();
+    list($membership, $term) = $this->createMembershipWithTerm($account, MEMBERSHIP_ENTITY_PENDING);
+    $payment = $this->startPayment($term);
+    membership_entity_term_delete($term->id);
+
+    drop_pay_set_status($payment, 'completed');
+
+    $count = db_query("SELECT COUNT(*) FROM {watchdog} WHERE type = 'drop_membership_entity' AND severity = :severity AND message LIKE :message", array(
+      ':severity' => WATCHDOG_WARNING,
+      ':message'  => '%no longer exists%',
+    ))->fetchField();
+    $this->assertEqual($count, 1, 'A warning is logged for staff to reconcile the payment.');
   }
 
 }

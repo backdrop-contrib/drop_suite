@@ -59,7 +59,7 @@ Settings live at `drop/settings` — a dashboard page that lists configuration e
 - **Drop CRM**: `drop/crm/settings` (activity types, contact-method labels, relationship types, outreach goals)
 - **Drop Docs**: `drop/docs/settings`
 - **Drop Files**: `drop/files/settings`
-- **Drop Membership Entity**: term lengths and prices are on the membership type settings (`admin/memberships/types`)
+- **Drop Membership Entity**: `drop/memberships/settings` (leads to the membership type settings, where term lengths and prices are set)
 
 Most configuration is stored in Backdrop's config system (JSON files in `config/active/`).
 
