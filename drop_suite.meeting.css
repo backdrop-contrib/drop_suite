@@ -112,3 +112,13 @@
   background: #fff8e1;
   color: #e65100;
 }
+
+/* Postponed items: dimmed, with an Undo link. */
+.drop-meeting-item--postponed {
+  opacity: 0.75;
+}
+
+.drop-meeting-action--undo {
+  font-size: 0.85em;
+  text-decoration: underline;
+}
