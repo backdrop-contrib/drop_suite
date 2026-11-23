@@ -79,8 +79,8 @@ function drop_pay_stripe_initiate(DropPayment $payment, array $request) {
   $currency = strtolower($payment->currency ?: 'USD');
   $amount_cents = _drop_pay_stripe_to_smallest_unit((float) $payment->amount, $currency);
 
-  $return_url = url('drop/pay/return/' . $payment->pid, array('absolute' => TRUE));
-  $cancel_url = url('drop/pay/cancel/' . $payment->pid, array('absolute' => TRUE));
+  $return_url = drop_pay_payment_url('return', $payment);
+  $cancel_url = drop_pay_payment_url('cancel', $payment);
 
   // Stash the consumer's return_path / cancel_path on the payment so the
   // return + cancel pages can redirect after we're done.
@@ -258,11 +258,16 @@ function drop_pay_stripe_refund(DropPayment $payment, $amount = NULL) {
 /**
  * Implements hook_stripe_webhook().
  *
- * Reacts to checkout.session.completed and charge.refunded events. The user
- * may close their browser before being redirected to /drop/pay/return/{pid},
- * so the webhook is the authoritative source of completion.
+ * Reacts to checkout.session.completed and charge.refunded events. The payer
+ * may close their browser before reaching /drop/pay/return/{pid}, so the
+ * webhook is how most payments complete.
+ *
+ * The posted event is only a hint about which payment to look at. Its
+ * contents are never trusted: anyone can post to stripe/webhook, and the
+ * contrib Stripe module doesn't verify test-mode events. Each payment is
+ * checked with Stripe's API before anything changes.
  */
-function drop_pay_stripe_stripe_webhook($type, $data, ?Stripe\Event $event = NULL) {
+function drop_pay_stripe_stripe_webhook($type, $data, $event = NULL) {
   if ($type !== 'checkout.session.completed' && $type !== 'charge.refunded') {
     return;
   }
@@ -273,64 +278,90 @@ function drop_pay_stripe_stripe_webhook($type, $data, ?Stripe\Event $event = NUL
   }
 
   if ($type === 'checkout.session.completed') {
-    $session_id = isset($obj->id) ? $obj->id : NULL;
-    $pid = isset($obj->client_reference_id) ? (int) $obj->client_reference_id : 0;
-    if (!$pid && !empty($obj->metadata) && isset($obj->metadata->drop_pay_pid)) {
-      $pid = (int) $obj->metadata->drop_pay_pid;
-    }
-    $payment = $pid ? drop_payment_load($pid) : FALSE;
+    $payment = _drop_pay_stripe_webhook_payment($obj);
     if (!$payment) {
-      // Fall back to looking up by gateway_transaction_id.
-      if ($session_id) {
-        $found = db_select('drop_payment', 'p')
-          ->fields('p', array('pid'))
-          ->condition('gateway', 'stripe')
-          ->condition('gateway_transaction_id', $session_id)
-          ->execute()
-          ->fetchField();
-        if ($found) {
-          $payment = drop_payment_load($found);
-        }
-      }
-    }
-    if (!$payment) {
-      watchdog('drop_pay_stripe', 'Webhook checkout.session.completed could not match a drop_payment (session @s).', array('@s' => (string) $session_id), WATCHDOG_WARNING);
+      watchdog('drop_pay_stripe', 'Webhook checkout.session.completed did not match a pending Stripe payment.', array(), WATCHDOG_WARNING);
       return;
     }
-    if (isset($obj->payment_status) && $obj->payment_status === 'paid') {
-      $merge = array();
-      if (!empty($obj->payment_intent)) {
-        $merge['stripe_payment_intent'] = $obj->payment_intent;
-      }
-      $merge['stripe_payment_status'] = $obj->payment_status;
-      drop_pay_set_status($payment, 'completed', $merge);
-    }
+    // Asks Stripe about the session stored on the payment (not the posted
+    // one) and completes the payment only if Stripe says it is paid.
+    drop_pay_refresh($payment);
     return;
   }
 
-  // charge.refunded — try to match by payment_intent.
-  if ($type === 'charge.refunded') {
-    $intent = isset($obj->payment_intent) ? $obj->payment_intent : NULL;
-    if (!$intent) {
+  // charge.refunded: fetch the charge from Stripe and act only on a full
+  // refund. A partial refund leaves the payment completed.
+  $charge_id = isset($obj->id) ? (string) $obj->id : '';
+  if ($charge_id === '') {
+    return;
+  }
+  try {
+    _drop_pay_stripe_load_sdk();
+    $secret = stripe_get_secret_key();
+    if (empty($secret)) {
       return;
     }
-    // Metadata is stored as a serialized blob; we have to scan.
-    $rows = db_select('drop_payment', 'p')
-      ->fields('p', array('pid', 'metadata'))
-      ->condition('gateway', 'stripe')
-      ->condition('status', 'completed')
-      ->execute();
-    foreach ($rows as $row) {
-      $meta = $row->metadata ? unserialize($row->metadata) : array();
-      if (!empty($meta['stripe_payment_intent']) && $meta['stripe_payment_intent'] === $intent) {
-        $payment = drop_payment_load($row->pid);
-        if ($payment) {
-          drop_pay_set_status($payment, 'refunded', array('stripe_refund_via' => 'webhook'));
-        }
-        break;
+    \Stripe\Stripe::setApiKey($secret);
+    $charge = \Stripe\Charge::retrieve($charge_id);
+  }
+  catch (Exception $e) {
+    watchdog('drop_pay_stripe', 'Webhook charge.refunded: could not retrieve charge @id: @msg', array('@id' => $charge_id, '@msg' => $e->getMessage()), WATCHDOG_ERROR);
+    return;
+  }
+  if (empty($charge->refunded) || empty($charge->payment_intent)) {
+    return;
+  }
+  $intent = is_string($charge->payment_intent) ? $charge->payment_intent : $charge->payment_intent->id;
+
+  // Metadata is stored as a serialized blob; we have to scan.
+  $rows = db_select('drop_payment', 'p')
+    ->fields('p', array('pid', 'metadata'))
+    ->condition('gateway', 'stripe')
+    ->condition('status', 'completed')
+    ->execute();
+  foreach ($rows as $row) {
+    $meta = $row->metadata ? unserialize($row->metadata, array('allowed_classes' => FALSE)) : array();
+    if (!empty($meta['stripe_payment_intent']) && $meta['stripe_payment_intent'] === $intent) {
+      $payment = drop_payment_load($row->pid);
+      if ($payment) {
+        drop_pay_set_status($payment, 'refunded', array('stripe_refund_via' => 'webhook'));
       }
+      break;
     }
   }
+}
+
+/**
+ * Finds the pending Stripe payment a checkout.session.completed event names.
+ *
+ * @param object $obj
+ *   The posted session object (untrusted).
+ *
+ * @return DropPayment|false
+ *   The payment, if it is a pending Stripe payment.
+ */
+function _drop_pay_stripe_webhook_payment($obj) {
+  $payment = FALSE;
+  $pid = isset($obj->client_reference_id) ? (int) $obj->client_reference_id : 0;
+  if (!$pid && !empty($obj->metadata) && isset($obj->metadata->drop_pay_pid)) {
+    $pid = (int) $obj->metadata->drop_pay_pid;
+  }
+  if ($pid) {
+    $payment = drop_payment_load($pid);
+  }
+  if (!$payment && !empty($obj->id)) {
+    $found = db_select('drop_payment', 'p')
+      ->fields('p', array('pid'))
+      ->condition('gateway', 'stripe')
+      ->condition('gateway_transaction_id', (string) $obj->id)
+      ->execute()
+      ->fetchField();
+    $payment = $found ? drop_payment_load($found) : FALSE;
+  }
+  if (!$payment || $payment->gateway !== 'stripe' || $payment->status !== 'pending') {
+    return FALSE;
+  }
+  return $payment;
 }
 
 // ---------------------------------------------------------------------------

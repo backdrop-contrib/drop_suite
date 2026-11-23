@@ -29,6 +29,9 @@ abstract class DropPayTestBase extends BackdropWebTestCase {
     state_del('drop_pay_test_gateway:confirm_result');
     state_del('drop_pay_test_gateway:fail_initiate');
     state_del('drop_pay_test_gateway:no_redirect');
+    state_del('drop_pay_test_gateway:confirm_fails');
+    state_del('drop_pay_test_gateway:expire_calls');
+    state_del('drop_pay_test_gateway:expire_fails');
   }
 
 }
@@ -321,3 +324,212 @@ class DropPayManualPaymentTest extends DropPayTestBase {
   }
 
 }
+
+/**
+ * Who can open the return and cancel pages, and what they do.
+ */
+class DropPayPaymentPagesTest extends DropPayTestBase {
+
+  /**
+   * Starts a payment through the test gateway and reloads it.
+   */
+  protected function startPayment($description = 'Page test') {
+    $result = drop_pay_charge(array(
+      'amount'      => 20,
+      'description' => $description,
+      'return_path' => 'user',
+      'cancel_path' => 'user',
+    ));
+    return drop_payment_load($result['pid']);
+  }
+
+  /**
+   * Reloads a payment, bypassing the entity cache (pages change it).
+   */
+  protected function reload($pid) {
+    entity_get_controller('drop_payment')->resetCache();
+    return drop_payment_load($pid);
+  }
+
+  /**
+   * The return page needs the payment's token, or staff permission.
+   */
+  public function testReturnPageAccess() {
+    $payment = $this->startPayment('Secret description');
+    state_set('drop_pay_test_gateway:confirm_result', FALSE);
+
+    $this->backdropGet('drop/pay/return/' . $payment->pid);
+    $this->assertResponse(403, 'Without the token, the return page is denied.');
+    $this->assertNoText('Secret description', 'The payment description is not shown.');
+
+    $this->backdropGet('drop/pay/return/' . $payment->pid, array('query' => array('token' => 'wrong')));
+    $this->assertResponse(403, 'A wrong token is denied.');
+
+    $this->backdropGet(drop_pay_payment_url('return', $payment));
+    $this->assertResponse(200, 'The payer, with the token, can open the return page.');
+
+    $other = $this->startPayment('Another payment');
+    $this->backdropGet('drop/pay/return/' . $other->pid, array('query' => array('token' => drop_pay_payment_token($payment))));
+    $this->assertResponse(403, 'One payment\'s token does not open another payment.');
+
+    $staff = $this->backdropCreateUser(array('view drop_pay payments'));
+    $this->backdropLogin($staff);
+    $this->backdropGet('drop/pay/return/' . $payment->pid);
+    $this->assertResponse(200, 'Staff who can view payments can open the return page.');
+  }
+
+  /**
+   * The cancel page needs the token, then checks and expires the checkout.
+   */
+  public function testCancelPage() {
+    $payment = $this->startPayment();
+    state_set('drop_pay_test_gateway:confirm_result', FALSE);
+
+    $this->backdropGet('drop/pay/cancel/' . $payment->pid);
+    $this->assertResponse(403, 'Without the token, the cancel page is denied.');
+    $this->assertEqual($this->reload($payment->pid)->status, 'pending', 'Nothing was cancelled.');
+
+    $this->backdropGet(drop_pay_payment_url('cancel', $payment));
+    $this->assertEqual($this->reload($payment->pid)->status, 'cancelled', 'With the token, the payment is cancelled.');
+    $this->assertEqual(state_get('drop_pay_test_gateway:expire_calls', 0), 1, 'The checkout was expired at the gateway first.');
+    $this->assertText('Payment was cancelled.', 'The payer is told.');
+  }
+
+  /**
+   * Cancelling a payment that was already paid completes it instead.
+   */
+  public function testCancelPageCompletesPaidPayment() {
+    $payment = $this->startPayment();
+    state_set('drop_pay_test_gateway:confirm_result', TRUE);
+
+    $this->backdropGet(drop_pay_payment_url('cancel', $payment));
+    $this->assertEqual($this->reload($payment->pid)->status, 'completed', 'A paid payment is completed, not cancelled.');
+    $this->assertText('already gone through', 'The payer is told it went through.');
+  }
+
+  /**
+   * If the checkout can't be expired, the payment stays pending.
+   */
+  public function testCancelPageWhenExpireFails() {
+    $payment = $this->startPayment();
+    state_set('drop_pay_test_gateway:confirm_result', FALSE);
+    state_set('drop_pay_test_gateway:expire_fails', TRUE);
+
+    $this->backdropGet(drop_pay_payment_url('cancel', $payment));
+    $this->assertEqual($this->reload($payment->pid)->status, 'pending', 'The payment stays pending while its checkout is still payable.');
+    $this->assertText('could not be reached', 'The payer is told to try again.');
+  }
+
+  /**
+   * A gateway error on the return page leaves the payment pending.
+   */
+  public function testReturnPageGatewayErrorLeavesPending() {
+    module_load_include('inc', 'drop_pay', 'drop_pay.pages');
+    $payment = $this->startPayment();
+    state_set('drop_pay_test_gateway:confirm_fails', TRUE);
+
+    drop_pay_return_page($payment);
+    $this->assertEqual($this->reload($payment->pid)->status, 'pending', 'A gateway error does not fail the payment.');
+  }
+
+}
+
+/**
+ * Only allowed status changes are made, and each fires the hook once.
+ */
+class DropPayTransitionTest extends DropPayTestBase {
+
+  /**
+   * Final statuses stay final; repeats don't notify consumers again.
+   */
+  public function testTransitions() {
+    $result = drop_pay_charge(array('amount' => 5, 'description' => 'Transitions'));
+    $payment = drop_payment_load($result['pid']);
+
+    $this->assertTrue(drop_pay_set_status($payment, 'cancelled'), 'pending -> cancelled is allowed.');
+    state_del('drop_pay_test_gateway:status_log');
+    $this->assertFalse(drop_pay_set_status($payment, 'completed'), 'cancelled -> completed is refused.');
+    $this->assertEqual(drop_payment_load($payment->pid)->status, 'cancelled', 'The payment stays cancelled.');
+    $this->assertEqual(count(state_get('drop_pay_test_gateway:status_log', array())), 0, 'No hook fired for the refused change.');
+
+    $result = drop_pay_charge(array('amount' => 5, 'description' => 'Repeat'));
+    $payment = drop_payment_load($result['pid']);
+    drop_pay_set_status($payment, 'completed');
+    state_del('drop_pay_test_gateway:status_log');
+    $this->assertFalse(drop_pay_set_status($payment, 'completed', array('again' => 1)), 'Completing twice is not a change.');
+    $this->assertEqual(count(state_get('drop_pay_test_gateway:status_log', array())), 0, 'A repeated completion does not fire the hook again.');
+    $meta = drop_payment_load($payment->pid)->metadata;
+    $this->assertEqual($meta['again'], 1, 'Its metadata is still saved.');
+
+    $this->assertTrue(drop_pay_set_status($payment, 'refunded'), 'completed -> refunded is allowed.');
+    $this->assertFalse(drop_pay_set_status($payment, 'completed'), 'refunded -> completed is refused.');
+  }
+
+}
+
+/**
+ * The Stripe webhook never trusts the posted event.
+ */
+class DropPayStripeWebhookTest extends DropPayTestBase {
+
+  /**
+   * {@inheritdoc}
+   */
+  public function setUp() {
+    parent::setUp();
+    module_enable(array('stripe', 'drop_pay_stripe'));
+    backdrop_static_reset('drop_pay_get_gateways');
+  }
+
+  /**
+   * Turns a test-gateway payment into a Stripe one.
+   */
+  protected function stripePayment($status = 'pending', array $metadata = array()) {
+    $result = drop_pay_charge(array('amount' => 30, 'description' => 'Webhook test'));
+    db_update('drop_payment')
+      ->fields(array(
+        'gateway'                => 'stripe',
+        'gateway_transaction_id' => 'cs_test_' . $result['pid'],
+        'status'                 => $status,
+        'metadata'               => serialize($metadata),
+      ))
+      ->condition('pid', $result['pid'])
+      ->execute();
+    entity_get_controller('drop_payment')->resetCache();
+    return drop_payment_load($result['pid']);
+  }
+
+  /**
+   * A forged "paid" event does not complete the payment.
+   */
+  public function testForgedCompletion() {
+    $payment = $this->stripePayment();
+    $data = json_decode(json_encode(array('object' => array(
+      'id'                  => 'cs_forged',
+      'client_reference_id' => (string) $payment->pid,
+      'payment_status'      => 'paid',
+    ))));
+    drop_pay_stripe_stripe_webhook('checkout.session.completed', $data);
+
+    entity_get_controller('drop_payment')->resetCache();
+    $this->assertEqual(drop_payment_load($payment->pid)->status, 'pending', 'The payment stays pending: Stripe was not able to confirm it.');
+  }
+
+  /**
+   * A forged refund event does not refund the payment.
+   */
+  public function testForgedRefund() {
+    $payment = $this->stripePayment('completed', array('stripe_payment_intent' => 'pi_123'));
+    $data = json_decode(json_encode(array('object' => array(
+      'id'             => 'ch_forged',
+      'payment_intent' => 'pi_123',
+      'refunded'       => TRUE,
+    ))));
+    drop_pay_stripe_stripe_webhook('charge.refunded', $data);
+
+    entity_get_controller('drop_payment')->resetCache();
+    $this->assertEqual(drop_payment_load($payment->pid)->status, 'completed', 'The payment stays completed: Stripe was not able to confirm the refund.');
+  }
+
+}
+

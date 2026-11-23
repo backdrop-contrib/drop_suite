@@ -27,3 +27,21 @@ name = Drop Pay offline payments
 description = drop_pay_record_payment completes the payment, stores method and reference, fires hook_drop_pay_payment_status; the Record a payment form, offline refunds and the methods setting.
 group = Drop Pay
 file = drop_pay.test
+
+[DropPayPaymentPagesTest]
+name = Drop Pay return and cancel pages
+description = The return and cancel pages need the payment's token (or staff permission); cancelling checks with the gateway and expires the checkout first; a gateway error leaves the payment pending.
+group = Drop Pay
+file = drop_pay.test
+
+[DropPayTransitionTest]
+name = Drop Pay allowed status changes
+description = Cancelled, failed and refunded are final; a repeated completion saves metadata but does not fire the hook again.
+group = Drop Pay
+file = drop_pay.test
+
+[DropPayStripeWebhookTest]
+name = Drop Pay Stripe webhook
+description = Forged checkout.session.completed and charge.refunded events change nothing unless Stripe confirms them.
+group = Drop Pay
+file = drop_pay.test

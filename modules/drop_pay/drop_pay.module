@@ -270,19 +270,23 @@ function drop_pay_menu() {
     }
   }
 
-  // Return URL after the user finishes (or cancels) checkout at the gateway.
+  // Return and cancel URLs the gateway sends the payer back to. Build them
+  // with drop_pay_payment_url(): they carry a token, so only the payer (who
+  // has the URL) and staff can open them.
   $items['drop/pay/return/%drop_payment'] = array(
     'title'            => 'Payment status',
     'page callback'    => 'drop_pay_return_page',
     'page arguments'   => array(3),
-    'access callback'  => TRUE,
+    'access callback'  => 'drop_pay_payment_page_access',
+    'access arguments' => array(3, 'return'),
     'file'             => 'drop_pay.pages.inc',
   );
   $items['drop/pay/cancel/%drop_payment'] = array(
     'title'            => 'Payment cancelled',
     'page callback'    => 'drop_pay_cancel_page',
     'page arguments'   => array(3),
-    'access callback'  => TRUE,
+    'access callback'  => 'drop_pay_payment_page_access',
+    'access arguments' => array(3, 'cancel'),
     'file'             => 'drop_pay.pages.inc',
   );
 
@@ -357,6 +361,66 @@ function drop_pay_default_gateway() {
 // ---------------------------------------------------------------------------
 // Dispatch API
 // ---------------------------------------------------------------------------
+
+/**
+ * Returns the token that lets a payer open a payment's return or cancel page.
+ *
+ * @param DropPayment $payment
+ *   The payment.
+ *
+ * @return string
+ *   A URL-safe HMAC of the payment ID and creation time, keyed on this
+ *   site's private key.
+ */
+function drop_pay_payment_token(DropPayment $payment) {
+  return backdrop_hmac_base64('drop_pay:' . $payment->pid . ':' . $payment->created, backdrop_get_private_key() . backdrop_get_hash_salt());
+}
+
+/**
+ * Returns the absolute return or cancel URL for a payment, with its token.
+ *
+ * Gateways use these as the addresses the payer comes back to.
+ *
+ * @param string $op
+ *   'return' or 'cancel'.
+ * @param DropPayment $payment
+ *   The payment.
+ *
+ * @return string
+ *   The absolute URL.
+ */
+function drop_pay_payment_url($op, DropPayment $payment) {
+  return url('drop/pay/' . $op . '/' . $payment->pid, array(
+    'absolute' => TRUE,
+    'query'    => array('token' => drop_pay_payment_token($payment)),
+  ));
+}
+
+/**
+ * Access callback for drop/pay/return/N and drop/pay/cancel/N.
+ *
+ * The payer is identified by the token in the URL the gateway sent them back
+ * to (they may be anonymous). Staff can open return pages with 'view drop_pay
+ * payments' and both pages with 'administer drop_pay'.
+ *
+ * @param DropPayment $payment
+ *   The payment.
+ * @param string $op
+ *   'return' or 'cancel'.
+ *
+ * @return bool
+ *   Whether the current person may open the page.
+ */
+function drop_pay_payment_page_access($payment, $op) {
+  if (!$payment) {
+    return FALSE;
+  }
+  if (user_access('administer drop_pay') || ($op === 'return' && user_access('view drop_pay payments'))) {
+    return TRUE;
+  }
+  $token = isset($_GET['token']) ? (string) $_GET['token'] : '';
+  return $token !== '' && hash_equals(drop_pay_payment_token($payment), $token);
+}
 
 /**
  * Initiates a payment via the configured gateway.
@@ -450,27 +514,79 @@ function drop_pay_charge(array $request) {
 }
 
 /**
+ * Returns the status changes a payment may make.
+ *
+ * @return array
+ *   For each status, the statuses it may change to. Cancelled, failed and
+ *   refunded are final.
+ */
+function drop_pay_status_transitions() {
+  return array(
+    'pending'   => array('completed', 'failed', 'cancelled'),
+    'completed' => array('refunded'),
+    'failed'    => array(),
+    'cancelled' => array(),
+    'refunded'  => array(),
+  );
+}
+
+/**
  * Updates the status of a payment and fires hook_drop_pay_payment_status.
  *
  * Use this rather than setting $payment->status directly so consumers get
- * notified.
+ * notified. Only the changes in drop_pay_status_transitions() are made, so a
+ * cancelled payment can't be completed and a repeated gateway notification
+ * doesn't notify consumers twice.
+ *
+ * @param DropPayment $payment
+ *   The payment.
+ * @param string $new_status
+ *   The new status.
+ * @param array $metadata_merge
+ *   Metadata to merge into the payment's metadata. When the status doesn't
+ *   change, the metadata is still saved, but no hook fires.
+ *
+ * @return bool
+ *   TRUE if the status changed.
  */
 function drop_pay_set_status(DropPayment $payment, $new_status, array $metadata_merge = array()) {
-  if ($payment->status === $new_status && empty($metadata_merge)) {
-    return;
+  if (!empty($metadata_merge)) {
+    $existing = is_array($payment->metadata) ? $payment->metadata : array();
+    $payment->metadata = $metadata_merge + $existing;
   }
+
+  if ($payment->status === $new_status) {
+    if (!empty($metadata_merge)) {
+      $payment->changed = REQUEST_TIME;
+      $payment->save();
+    }
+    return FALSE;
+  }
+
+  $transitions = drop_pay_status_transitions();
+  $allowed = isset($transitions[$payment->status]) ? $transitions[$payment->status] : array();
+  if (!in_array($new_status, $allowed, TRUE)) {
+    watchdog('drop_pay', 'Payment #@pid: refused to change status from @from to @to.', array(
+      '@pid'  => $payment->pid,
+      '@from' => $payment->status,
+      '@to'   => $new_status,
+    ), WATCHDOG_WARNING);
+    if (!empty($metadata_merge)) {
+      $payment->changed = REQUEST_TIME;
+      $payment->save();
+    }
+    return FALSE;
+  }
+
   $previous = $payment->status;
   $payment->status = $new_status;
   $payment->changed = REQUEST_TIME;
   if ($new_status === 'completed' && empty($payment->completed)) {
     $payment->completed = REQUEST_TIME;
   }
-  if (!empty($metadata_merge)) {
-    $existing = is_array($payment->metadata) ? $payment->metadata : array();
-    $payment->metadata = $metadata_merge + $existing;
-  }
   $payment->save();
   module_invoke_all('drop_pay_payment_status', $payment, $previous);
+  return TRUE;
 }
 
 // ---------------------------------------------------------------------------

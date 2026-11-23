@@ -31,8 +31,10 @@ function drop_pay_return_page(DropPayment $payment) {
         $confirmed = (bool) $callback($payment);
       }
       catch (Exception $e) {
-        watchdog('drop_pay', 'Gateway confirm threw: @msg', array('@msg' => $e->getMessage()), WATCHDOG_ERROR);
-        drop_pay_set_status($payment, 'failed', array('error' => $e->getMessage()));
+        // A gateway hiccup (timeout, rate limit) says nothing about whether
+        // the payer paid, so leave the payment pending: the webhook, the
+        // payer's next visit or the consumer's cleanup settles it later.
+        watchdog('drop_pay', 'Gateway confirm threw for payment #@pid: @msg', array('@pid' => $payment->pid, '@msg' => $e->getMessage()), WATCHDOG_ERROR);
         $confirmed = FALSE;
       }
 
@@ -61,21 +63,35 @@ function drop_pay_return_page(DropPayment $payment) {
 /**
  * Page callback for /drop/pay/cancel/{pid}.
  *
- * Called when the user backs out of the gateway checkout. Marks the payment
- * cancelled (only if still pending) and redirects to the consumer's return
- * path if one was supplied.
+ * Called when the payer backs out of the gateway checkout. Goes through
+ * drop_pay_abandon(): the gateway is asked first (a payment that went through
+ * is completed, not cancelled), then the checkout is expired so it can't be
+ * paid later from the browser history, and only then is the payment
+ * cancelled. Redirects to the consumer's cancel or return path if one was
+ * supplied.
  */
 function drop_pay_cancel_page(DropPayment $payment) {
-  if ($payment->status === 'pending') {
-    drop_pay_set_status($payment, 'cancelled');
+  switch (drop_pay_abandon($payment)) {
+    case 'cancelled':
+      backdrop_set_message(t('Payment was cancelled.'), 'warning');
+      break;
+
+    case 'completed':
+      backdrop_set_message(t('Your payment had already gone through, so nothing was cancelled. Thank you.'));
+      break;
+
+    case 'unchanged':
+      break;
+
+    default:
+      backdrop_set_message(t('The payment provider could not be reached, so the payment was not cancelled. Please try again in a few minutes.'), 'warning');
+      break;
   }
 
   $metadata = is_array($payment->metadata) ? $payment->metadata : array();
   $back = !empty($metadata['cancel_path'])
     ? $metadata['cancel_path']
     : (!empty($metadata['return_path']) ? $metadata['return_path'] : '<front>');
-
-  backdrop_set_message(t('Payment was cancelled.'), 'warning');
   backdrop_goto($back);
 }
 
