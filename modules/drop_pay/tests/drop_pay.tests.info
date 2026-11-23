@@ -1,0 +1,47 @@
+[DropPayDispatchTest]
+name = Drop Pay dispatch
+description = drop_pay_charge creates a pending payment, calls the gateway's initiate, returns the redirect URL, and records failure paths.
+group = Drop Pay
+file = drop_pay.test
+
+[DropPayStatusTest]
+name = Drop Pay status transitions
+description = drop_pay_set_status persists the status change, stamps completed, merges metadata, and fires hook_drop_pay_payment_status.
+group = Drop Pay
+file = drop_pay.test
+
+[DropPayReturnPageTest]
+name = Drop Pay return page
+description = /drop/pay/return/{pid} calls the gateway's confirm callback, flips status to completed on success, honours the return_path metadata, and leaves pending when the gateway is unsure.
+group = Drop Pay
+file = drop_pay.test
+
+[DropPaySettingsLocationTest]
+name = Drop Pay settings location
+description = Settings live at drop/pay/settings with a dashboard card.
+group = Drop Pay
+file = drop_pay.test
+
+[DropPayManualPaymentTest]
+name = Drop Pay offline payments
+description = drop_pay_record_payment completes the payment, stores method and reference, fires hook_drop_pay_payment_status; the Record a payment form, offline refunds and the methods setting.
+group = Drop Pay
+file = drop_pay.test
+
+[DropPayPaymentPagesTest]
+name = Drop Pay return and cancel pages
+description = The return and cancel pages need the payment's token (or staff permission); cancelling checks with the gateway and expires the checkout first; a gateway error leaves the payment pending.
+group = Drop Pay
+file = drop_pay.test
+
+[DropPayTransitionTest]
+name = Drop Pay allowed status changes
+description = Cancelled, failed and refunded are final; a repeated completion saves metadata but does not fire the hook again.
+group = Drop Pay
+file = drop_pay.test
+
+[DropPayStripeWebhookTest]
+name = Drop Pay Stripe webhook
+description = Forged checkout.session.completed and charge.refunded events change nothing unless Stripe confirms them.
+group = Drop Pay
+file = drop_pay.test

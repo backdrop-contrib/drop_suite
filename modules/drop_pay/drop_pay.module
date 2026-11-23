@@ -1,0 +1,803 @@
+<?php
+/**
+ * @file
+ * Drop Pay — payment gateway abstraction for Drop Suite.
+ *
+ * This module provides a generic drop_payment entity, a gateway plugin
+ * interface (hook_drop_pay_gateways), and a dispatch API (drop_pay_charge).
+ * Gateway-specific implementations live in submodules — drop_pay_stripe,
+ * drop_pay_paypal, etc. Offline payments (cash, check) are recorded with
+ * drop_pay_record_payment() under the reserved gateway name 'manual'.
+ */
+
+/**
+ * Gateway name stored on payments recorded offline (cash, check, etc.).
+ */
+define('DROP_PAY_MANUAL', 'manual');
+
+// ---------------------------------------------------------------------------
+// Autoload
+// ---------------------------------------------------------------------------
+
+/**
+ * Implements hook_autoload_info().
+ */
+function drop_pay_autoload_info() {
+  return array(
+    'DropPayment'           => 'drop_pay.entity.inc',
+    'DropPaymentController' => 'drop_pay.entity.inc',
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Entity info
+// ---------------------------------------------------------------------------
+
+/**
+ * Implements hook_entity_info().
+ */
+function drop_pay_entity_info() {
+  return array(
+    'drop_payment' => array(
+      'label'                  => t('Payment'),
+      'plural label'           => t('Payments'),
+      'description'            => t('A payment processed via a drop_pay gateway.'),
+      'entity class'           => 'DropPayment',
+      'controller class'       => 'DropPaymentController',
+      'views controller class' => 'EntityPlusDefaultViewsController',
+      'base table'             => 'drop_payment',
+      'fieldable'              => FALSE,
+      'entity keys'            => array(
+        'id' => 'pid',
+      ),
+      'uri callback'           => 'entity_class_uri',
+      'access callback'        => 'drop_pay_payment_access',
+      'module'                 => 'drop_pay',
+    ),
+  );
+}
+
+/**
+ * Implements hook_entity_property_info().
+ *
+ * Exposes drop_payment columns to Views via EntityPlusDefaultViewsController.
+ */
+function drop_pay_entity_property_info() {
+  $info = array();
+  $p = &$info['drop_payment']['properties'];
+  $p['pid'] = array(
+    'label'           => t('Payment ID'),
+    'type'            => 'integer',
+    'description'     => t('Internal numeric identifier.'),
+    'schema field'    => 'pid',
+    'getter callback' => 'entity_plus_property_verbatim_get',
+  );
+  $p['amount'] = array(
+    'label'           => t('Amount'),
+    'type'            => 'decimal',
+    'description'     => t('Payment amount in the listed currency.'),
+    'schema field'    => 'amount',
+    'getter callback' => 'entity_plus_property_verbatim_get',
+    'setter callback' => 'entity_plus_property_verbatim_set',
+  );
+  $p['currency'] = array(
+    'label'           => t('Currency'),
+    'type'            => 'text',
+    'description'     => t('ISO 4217 currency code.'),
+    'schema field'    => 'currency',
+    'getter callback' => 'entity_plus_property_verbatim_get',
+    'setter callback' => 'entity_plus_property_verbatim_set',
+  );
+  $p['status'] = array(
+    'label'           => t('Status'),
+    'type'            => 'text',
+    'description'     => t('Payment lifecycle status.'),
+    'schema field'    => 'status',
+    'options list'    => '_drop_pay_status_options',
+    'getter callback' => 'entity_plus_property_verbatim_get',
+    'setter callback' => 'entity_plus_property_verbatim_set',
+  );
+  $p['gateway'] = array(
+    'label'           => t('Gateway'),
+    'type'            => 'text',
+    'description'     => t('Payment gateway machine name.'),
+    'schema field'    => 'gateway',
+    'getter callback' => 'entity_plus_property_verbatim_get',
+    'setter callback' => 'entity_plus_property_verbatim_set',
+  );
+  $p['gateway_transaction_id'] = array(
+    'label'           => t('Gateway Transaction ID'),
+    'type'            => 'text',
+    'description'     => t('Gateway-side identifier (Stripe session ID, PayPal Order ID, etc.).'),
+    'schema field'    => 'gateway_transaction_id',
+    'getter callback' => 'entity_plus_property_verbatim_get',
+    'setter callback' => 'entity_plus_property_verbatim_set',
+  );
+  $p['cid'] = array(
+    'label'           => t('Contact'),
+    'type'            => 'crm_contact',
+    'description'     => t('Optional CRM contact this payment is associated with.'),
+    'schema field'    => 'cid',
+    'getter callback' => 'entity_plus_property_verbatim_get',
+    'setter callback' => 'entity_plus_property_verbatim_set',
+  );
+  $p['purpose'] = array(
+    'label'           => t('Purpose'),
+    'type'            => 'text',
+    'description'     => t('Why this payment was made (dues, donation, etc.).'),
+    'schema field'    => 'purpose',
+    'getter callback' => 'entity_plus_property_verbatim_get',
+    'setter callback' => 'entity_plus_property_verbatim_set',
+  );
+  $p['description'] = array(
+    'label'           => t('Description'),
+    'type'            => 'text',
+    'description'     => t('Short human-readable label shown to the payer.'),
+    'schema field'    => 'description',
+    'getter callback' => 'entity_plus_property_verbatim_get',
+    'setter callback' => 'entity_plus_property_verbatim_set',
+  );
+  $p['created'] = array(
+    'label'           => t('Created'),
+    'type'            => 'date',
+    'description'     => t('Date the payment was initiated.'),
+    'schema field'    => 'created',
+    'getter callback' => 'entity_plus_property_verbatim_get',
+  );
+  $p['changed'] = array(
+    'label'           => t('Changed'),
+    'type'            => 'date',
+    'description'     => t('Date the payment was last modified.'),
+    'schema field'    => 'changed',
+    'getter callback' => 'entity_plus_property_verbatim_get',
+  );
+  $p['completed'] = array(
+    'label'           => t('Completed'),
+    'type'            => 'date',
+    'description'     => t('Date the payment moved to completed.'),
+    'schema field'    => 'completed',
+    'getter callback' => 'entity_plus_property_verbatim_get',
+  );
+  $p['uid'] = array(
+    'label'           => t('Initiated by'),
+    'type'            => 'user',
+    'description'     => t('User who initiated the payment.'),
+    'schema field'    => 'uid',
+    'getter callback' => 'entity_plus_property_verbatim_get',
+    'setter callback' => 'entity_plus_property_verbatim_set',
+  );
+  return $info;
+}
+
+// ---------------------------------------------------------------------------
+// Permissions + access
+// ---------------------------------------------------------------------------
+
+/**
+ * Implements hook_permission().
+ */
+function drop_pay_permission() {
+  return array(
+    'administer drop_pay' => array(
+      'title'           => t('Administer Drop Pay'),
+      'description'     => t('Configure gateways, view all payments, issue refunds.'),
+      'restrict access' => TRUE,
+    ),
+    'view drop_pay payments' => array(
+      'title'       => t('View Drop Pay payments'),
+      'description' => t('View the payment list and individual payment records.'),
+    ),
+  );
+}
+
+/**
+ * Access callback for drop_payment entities.
+ */
+function drop_pay_payment_access($op, $payment = NULL, $account = NULL) {
+  global $user;
+  if (!$account) {
+    $account = $user;
+  }
+  if (user_access('administer drop_pay', $account)) {
+    return TRUE;
+  }
+  if ($op === 'view') {
+    return user_access('view drop_pay payments', $account);
+  }
+  return FALSE;
+}
+
+// ---------------------------------------------------------------------------
+// Menu
+// ---------------------------------------------------------------------------
+
+/**
+ * Implements hook_menu().
+ */
+function drop_pay_menu() {
+  $items = array();
+
+  // Settings + per-gateway configuration.
+  $items['drop/pay/settings'] = array(
+    'title'            => 'Drop Pay settings',
+    'description'      => 'Configure payment gateways and view payment records.',
+    'page callback'    => 'backdrop_get_form',
+    'page arguments'   => array('drop_pay_settings_form'),
+    'access arguments' => array('administer drop_pay'),
+    'file'             => 'drop_pay.admin.inc',
+  );
+  $items['drop/pay/settings/general'] = array(
+    'title'  => 'Settings',
+    'type'   => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => -10,
+  );
+  $items['drop/pay/settings/payments'] = array(
+    'title'            => 'Payments',
+    'page callback'    => 'drop_pay_payment_list_page',
+    'access arguments' => array('view drop_pay payments'),
+    'file'             => 'drop_pay.admin.inc',
+    'type'             => MENU_LOCAL_TASK,
+    'weight'           => 0,
+  );
+  $items['drop/pay/settings/payments/record'] = array(
+    'title'            => 'Record a payment',
+    'page callback'    => 'backdrop_get_form',
+    'page arguments'   => array('drop_pay_record_payment_form'),
+    'access arguments' => array('administer drop_pay'),
+    'file'             => 'drop_pay.admin.inc',
+    'type'             => MENU_LOCAL_ACTION,
+  );
+  $items['drop/pay/settings/payment/%drop_payment'] = array(
+    'title'            => 'Payment',
+    'page callback'    => 'drop_pay_payment_view_page',
+    'page arguments'   => array(4),
+    'access callback'  => 'drop_pay_payment_access',
+    'access arguments' => array('view', 4),
+    'file'             => 'drop_pay.admin.inc',
+  );
+
+  // Per-gateway settings — discovered dynamically.
+  foreach (drop_pay_get_gateways() as $name => $gw) {
+    if (!empty($gw['settings_form'])) {
+      $items['drop/pay/settings/gateway/' . $name] = array(
+        'title'            => $gw['label'],
+        'page callback'    => 'backdrop_get_form',
+        'page arguments'   => array($gw['settings_form']),
+        'access arguments' => array('administer drop_pay'),
+        'type'             => MENU_LOCAL_TASK,
+        'weight'           => 10,
+      );
+    }
+  }
+
+  // Return and cancel URLs the gateway sends the payer back to. Build them
+  // with drop_pay_payment_url(): they carry a token, so only the payer (who
+  // has the URL) and staff can open them.
+  $items['drop/pay/return/%drop_payment'] = array(
+    'title'            => 'Payment status',
+    'page callback'    => 'drop_pay_return_page',
+    'page arguments'   => array(3),
+    'access callback'  => 'drop_pay_payment_page_access',
+    'access arguments' => array(3, 'return'),
+    'file'             => 'drop_pay.pages.inc',
+  );
+  $items['drop/pay/cancel/%drop_payment'] = array(
+    'title'            => 'Payment cancelled',
+    'page callback'    => 'drop_pay_cancel_page',
+    'page arguments'   => array(3),
+    'access callback'  => 'drop_pay_payment_page_access',
+    'access arguments' => array(3, 'cancel'),
+    'file'             => 'drop_pay.pages.inc',
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_drop_settings_info().
+ */
+function drop_pay_drop_settings_info() {
+  return array(
+    'drop_pay' => array(
+      'title'       => t('Drop Pay'),
+      'description' => t('Payment gateways and payment records.'),
+      'path'        => 'drop/pay/settings',
+      'permission'  => 'administer drop_pay',
+      'weight'      => 22,
+    ),
+  );
+}
+
+/**
+ * Menu loader for %drop_payment.
+ */
+function drop_payment_load($pid) {
+  $entities = entity_load('drop_payment', array($pid));
+  return $entities ? reset($entities) : FALSE;
+}
+
+// ---------------------------------------------------------------------------
+// Gateway discovery
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns all registered gateways, keyed by machine name.
+ *
+ * Cached statically per-request because hook_drop_pay_gateways() is called
+ * from menu router builds and several places in the dispatch flow.
+ */
+function drop_pay_get_gateways() {
+  $gateways = &backdrop_static(__FUNCTION__);
+  if (!isset($gateways)) {
+    $gateways = module_invoke_all('drop_pay_gateways');
+    // Normalize callbacks: each gateway must have at minimum 'label',
+    // 'initiate', and 'confirm'.
+    foreach ($gateways as $name => $gw) {
+      if (empty($gw['label']) || empty($gw['initiate']) || empty($gw['confirm'])) {
+        unset($gateways[$name]);
+      }
+    }
+    // 'manual' is reserved for offline payments recorded by staff.
+    unset($gateways[DROP_PAY_MANUAL]);
+  }
+  return $gateways;
+}
+
+/**
+ * Returns one gateway definition or NULL.
+ */
+function drop_pay_get_gateway($name) {
+  $gateways = drop_pay_get_gateways();
+  return isset($gateways[$name]) ? $gateways[$name] : NULL;
+}
+
+/**
+ * Returns the configured default gateway machine name, or '' if none set.
+ */
+function drop_pay_default_gateway() {
+  return (string) config_get('drop_pay.settings', 'default_gateway');
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch API
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the token that lets a payer open a payment's return or cancel page.
+ *
+ * @param DropPayment $payment
+ *   The payment.
+ *
+ * @return string
+ *   A URL-safe HMAC of the payment ID and creation time, keyed on this
+ *   site's private key.
+ */
+function drop_pay_payment_token(DropPayment $payment) {
+  return backdrop_hmac_base64('drop_pay:' . $payment->pid . ':' . $payment->created, backdrop_get_private_key() . backdrop_get_hash_salt());
+}
+
+/**
+ * Returns the absolute return or cancel URL for a payment, with its token.
+ *
+ * Gateways use these as the addresses the payer comes back to.
+ *
+ * @param string $op
+ *   'return' or 'cancel'.
+ * @param DropPayment $payment
+ *   The payment.
+ *
+ * @return string
+ *   The absolute URL.
+ */
+function drop_pay_payment_url($op, DropPayment $payment) {
+  return url('drop/pay/' . $op . '/' . $payment->pid, array(
+    'absolute' => TRUE,
+    'query'    => array('token' => drop_pay_payment_token($payment)),
+  ));
+}
+
+/**
+ * Access callback for drop/pay/return/N and drop/pay/cancel/N.
+ *
+ * The payer is identified by the token in the URL the gateway sent them back
+ * to (they may be anonymous). Staff can open return pages with 'view drop_pay
+ * payments' and both pages with 'administer drop_pay'.
+ *
+ * @param DropPayment $payment
+ *   The payment.
+ * @param string $op
+ *   'return' or 'cancel'.
+ *
+ * @return bool
+ *   Whether the current person may open the page.
+ */
+function drop_pay_payment_page_access($payment, $op) {
+  if (!$payment) {
+    return FALSE;
+  }
+  if (user_access('administer drop_pay') || ($op === 'return' && user_access('view drop_pay payments'))) {
+    return TRUE;
+  }
+  $token = isset($_GET['token']) ? (string) $_GET['token'] : '';
+  return $token !== '' && hash_equals(drop_pay_payment_token($payment), $token);
+}
+
+/**
+ * Initiates a payment via the configured gateway.
+ *
+ * Creates a drop_payment row in pending status, asks the gateway adapter to
+ * initiate, returns the gateway's response (typically a redirect URL).
+ *
+ * @param array $request
+ *   Required keys:
+ *     - amount        (numeric, in the currency's main unit — dollars not cents)
+ *     - description   (short label shown to the payer)
+ *   Optional keys:
+ *     - currency           (default USD)
+ *     - gateway            (machine name; default = configured default)
+ *     - cid                (associated CRM contact)
+ *     - purpose            ('dues' / 'donation' / etc.)
+ *     - purpose_entity_type
+ *     - purpose_entity_id
+ *     - return_path        (where to send the user after success — default drop/pay/return/{pid})
+ *
+ * @return array
+ *   array(
+ *     'pid'          => the new drop_payment's pid,
+ *     'redirect_url' => URL to send the user to (or NULL if the gateway
+ *                       handles redirect internally),
+ *     'error'        => optional error message,
+ *   )
+ */
+function drop_pay_charge(array $request) {
+  global $user;
+
+  if (empty($request['amount']) || $request['amount'] <= 0) {
+    return array('error' => t('Amount is required and must be greater than zero.'));
+  }
+  if (empty($request['description'])) {
+    return array('error' => t('Description is required.'));
+  }
+
+  $gateway_name = !empty($request['gateway']) ? $request['gateway'] : drop_pay_default_gateway();
+  $gateway = drop_pay_get_gateway($gateway_name);
+  if (!$gateway) {
+    return array('error' => t('No payment gateway is configured.'));
+  }
+
+  $payment = entity_create('drop_payment', array(
+    'amount'              => (float) $request['amount'],
+    'currency'            => !empty($request['currency']) ? $request['currency'] : 'USD',
+    'status'              => 'pending',
+    'gateway'             => $gateway_name,
+    'cid'                 => isset($request['cid']) ? (int) $request['cid'] : NULL,
+    'purpose'             => isset($request['purpose']) ? $request['purpose'] : '',
+    'purpose_entity_type' => isset($request['purpose_entity_type']) ? $request['purpose_entity_type'] : NULL,
+    'purpose_entity_id'   => isset($request['purpose_entity_id']) ? (int) $request['purpose_entity_id'] : NULL,
+    'description'         => $request['description'],
+    'metadata'            => array(),
+    'created'             => REQUEST_TIME,
+    'changed'             => REQUEST_TIME,
+    'uid'                 => $user->uid,
+  ));
+  $payment->save();
+
+  // Hand off to the gateway adapter.
+  $callback = $gateway['initiate'];
+  if (!function_exists($callback)) {
+    drop_pay_set_status($payment, 'failed', array('error' => 'initiate callback ' . $callback . ' not callable'));
+    return array('error' => t('Gateway initiate callback is missing.'), 'pid' => $payment->pid);
+  }
+
+  try {
+    $response = $callback($payment, $request);
+  }
+  catch (Exception $e) {
+    watchdog('drop_pay', 'Gateway initiate threw: @msg', array('@msg' => $e->getMessage()), WATCHDOG_ERROR);
+    drop_pay_set_status($payment, 'failed', array('error' => $e->getMessage()));
+    return array('error' => t('Payment initiation failed: @msg', array('@msg' => $e->getMessage())), 'pid' => $payment->pid);
+  }
+
+  if (empty($response['redirect_url'])) {
+    drop_pay_set_status($payment, 'failed', array('error' => 'gateway returned no redirect_url'));
+    return array('error' => t('Gateway did not return a redirect URL.'), 'pid' => $payment->pid);
+  }
+
+  // Keep the checkout address, so a consumer can send the payer back to it.
+  $payment->metadata = array('redirect_url' => $response['redirect_url']) + (is_array($payment->metadata) ? $payment->metadata : array());
+  $payment->save();
+
+  return array(
+    'pid'          => $payment->pid,
+    'redirect_url' => $response['redirect_url'],
+  );
+}
+
+/**
+ * Returns the status changes a payment may make.
+ *
+ * @return array
+ *   For each status, the statuses it may change to. Cancelled, failed and
+ *   refunded are final.
+ */
+function drop_pay_status_transitions() {
+  return array(
+    'pending'   => array('completed', 'failed', 'cancelled'),
+    'completed' => array('refunded'),
+    'failed'    => array(),
+    'cancelled' => array(),
+    'refunded'  => array(),
+  );
+}
+
+/**
+ * Updates the status of a payment and fires hook_drop_pay_payment_status.
+ *
+ * Use this rather than setting $payment->status directly so consumers get
+ * notified. Only the changes in drop_pay_status_transitions() are made, so a
+ * cancelled payment can't be completed and a repeated gateway notification
+ * doesn't notify consumers twice.
+ *
+ * @param DropPayment $payment
+ *   The payment.
+ * @param string $new_status
+ *   The new status.
+ * @param array $metadata_merge
+ *   Metadata to merge into the payment's metadata. When the status doesn't
+ *   change, the metadata is still saved, but no hook fires.
+ *
+ * @return bool
+ *   TRUE if the status changed.
+ */
+function drop_pay_set_status(DropPayment $payment, $new_status, array $metadata_merge = array()) {
+  if (!empty($metadata_merge)) {
+    $existing = is_array($payment->metadata) ? $payment->metadata : array();
+    $payment->metadata = $metadata_merge + $existing;
+  }
+
+  if ($payment->status === $new_status) {
+    if (!empty($metadata_merge)) {
+      $payment->changed = REQUEST_TIME;
+      $payment->save();
+    }
+    return FALSE;
+  }
+
+  $transitions = drop_pay_status_transitions();
+  $allowed = isset($transitions[$payment->status]) ? $transitions[$payment->status] : array();
+  if (!in_array($new_status, $allowed, TRUE)) {
+    watchdog('drop_pay', 'Payment #@pid: refused to change status from @from to @to.', array(
+      '@pid'  => $payment->pid,
+      '@from' => $payment->status,
+      '@to'   => $new_status,
+    ), WATCHDOG_WARNING);
+    if (!empty($metadata_merge)) {
+      $payment->changed = REQUEST_TIME;
+      $payment->save();
+    }
+    return FALSE;
+  }
+
+  $previous = $payment->status;
+  $payment->status = $new_status;
+  $payment->changed = REQUEST_TIME;
+  if ($new_status === 'completed' && empty($payment->completed)) {
+    $payment->completed = REQUEST_TIME;
+  }
+  $payment->save();
+  module_invoke_all('drop_pay_payment_status', $payment, $previous);
+  return TRUE;
+}
+
+// ---------------------------------------------------------------------------
+// Offline payments
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the offline payment methods, keyed by machine name.
+ *
+ * @return array
+ *   Labels keyed by method machine name, e.g. 'cash' => 'Cash'.
+ */
+function drop_pay_manual_methods() {
+  $methods = config_get('drop_pay.settings', 'manual_methods');
+  if (!is_array($methods) || empty($methods)) {
+    $methods = _drop_pay_default_manual_methods();
+  }
+  return $methods;
+}
+
+/**
+ * Returns the default offline payment methods.
+ */
+function _drop_pay_default_manual_methods() {
+  return array(
+    'cash'  => 'Cash',
+    'check' => 'Check',
+    'card'  => 'Card in person',
+    'other' => 'Other',
+  );
+}
+
+/**
+ * Records a payment received offline (cash, check, card in person).
+ *
+ * No gateway is involved: the payment is saved and then completed through
+ * drop_pay_set_status(), so hook_drop_pay_payment_status() fires exactly as
+ * it does when an online payment completes.
+ *
+ * @param array $request
+ *   Required keys:
+ *     - amount        (numeric, in the currency's main unit)
+ *     - description   (short label)
+ *     - method        (a key of drop_pay_manual_methods())
+ *   Optional keys:
+ *     - reference     (check number, receipt number, etc.)
+ *     - paid_date     (Unix timestamp the money was received; default now)
+ *     - currency      (default USD)
+ *     - cid, purpose, purpose_entity_type, purpose_entity_id
+ *       (same meaning as in drop_pay_charge())
+ *
+ * @return array
+ *   array('pid' => the new payment's pid) on success, or
+ *   array('error' => message) on failure.
+ */
+function drop_pay_record_payment(array $request) {
+  global $user;
+
+  if (empty($request['amount']) || !is_numeric($request['amount']) || $request['amount'] <= 0) {
+    return array('error' => t('Amount is required and must be greater than zero.'));
+  }
+  if (empty($request['description'])) {
+    return array('error' => t('Description is required.'));
+  }
+  $methods = drop_pay_manual_methods();
+  if (empty($request['method']) || !isset($methods[$request['method']])) {
+    return array('error' => t('Choose a payment method.'));
+  }
+
+  $paid = !empty($request['paid_date']) ? (int) $request['paid_date'] : REQUEST_TIME;
+
+  $payment = entity_create('drop_payment', array(
+    'amount'              => (float) $request['amount'],
+    'currency'            => !empty($request['currency']) ? $request['currency'] : 'USD',
+    'status'              => 'pending',
+    'gateway'             => DROP_PAY_MANUAL,
+    'cid'                 => !empty($request['cid']) ? (int) $request['cid'] : NULL,
+    'purpose'             => isset($request['purpose']) ? $request['purpose'] : '',
+    'purpose_entity_type' => isset($request['purpose_entity_type']) ? $request['purpose_entity_type'] : NULL,
+    'purpose_entity_id'   => isset($request['purpose_entity_id']) ? (int) $request['purpose_entity_id'] : NULL,
+    'description'         => $request['description'],
+    'metadata'            => array(
+      'method'    => $request['method'],
+      'reference' => isset($request['reference']) ? trim($request['reference']) : '',
+    ),
+    'created'             => REQUEST_TIME,
+    'changed'             => REQUEST_TIME,
+    // Set before completing, so drop_pay_set_status() keeps the paid date.
+    'completed'           => $paid,
+    'uid'                 => $user->uid,
+  ));
+  $payment->save();
+  drop_pay_set_status($payment, 'completed');
+
+  return array('pid' => $payment->pid);
+}
+
+/**
+ * Returns a human-readable label for how a payment was made.
+ *
+ * @param object $payment
+ *   A payment entity, or any object with 'gateway' and 'metadata' (array).
+ *
+ * @return string
+ *   Plain-text label, not yet escaped, e.g. 'Stripe (Checkout)' or
+ *   'Offline: Check'.
+ */
+function drop_pay_payment_method_label($payment) {
+  if ($payment->gateway === DROP_PAY_MANUAL) {
+    $methods = drop_pay_manual_methods();
+    $method = isset($payment->metadata['method']) ? $payment->metadata['method'] : '';
+    $label = isset($methods[$method]) ? $methods[$method] : $method;
+    return t('Offline: !method', array('!method' => $label));
+  }
+  $gateway = drop_pay_get_gateway($payment->gateway);
+  return $gateway ? $gateway['label'] : $payment->gateway;
+}
+
+/**
+ * Asks the gateway whether a pending payment has been paid.
+ *
+ * @return string
+ *   'paid', 'unpaid', or 'error' when the gateway could not be asked.
+ */
+function _drop_pay_confirm_pending(DropPayment $payment) {
+  $gateway = drop_pay_get_gateway($payment->gateway);
+  if (!$gateway || !function_exists($gateway['confirm'])) {
+    return 'error';
+  }
+  try {
+    return $gateway['confirm']($payment) ? 'paid' : 'unpaid';
+  }
+  catch (Exception $e) {
+    watchdog('drop_pay', 'Gateway confirm threw: @msg', array('@msg' => $e->getMessage()), WATCHDOG_ERROR);
+    return 'error';
+  }
+}
+
+/**
+ * Brings a pending payment up to date with the gateway.
+ *
+ * If the payer has paid since the page was left, the payment is completed.
+ *
+ * @return string
+ *   The payment's status afterwards.
+ */
+function drop_pay_refresh(DropPayment $payment) {
+  if ($payment->status === 'pending' && _drop_pay_confirm_pending($payment) === 'paid') {
+    drop_pay_set_status($payment, 'completed');
+  }
+  return $payment->status;
+}
+
+/**
+ * Cancels a pending payment that will not be paid, without losing a payment.
+ *
+ * Order matters. The gateway is asked first, so a payment made just before
+ * this runs is completed rather than cancelled. Then the checkout is expired
+ * at the gateway, so the payer can't pay it later. Only then is the payment
+ * cancelled here, which lets consumers (such as drop_membership_entity)
+ * remove what it was for.
+ *
+ * @return string
+ *   'completed' if the payer had already paid, 'cancelled' if it was cancelled,
+ *   'unchanged' if it was not pending, or 'error' if the gateway could not be
+ *   reached safely, in which case nothing has changed.
+ */
+function drop_pay_abandon(DropPayment $payment) {
+  if ($payment->status !== 'pending') {
+    return 'unchanged';
+  }
+  $check = _drop_pay_confirm_pending($payment);
+  if ($check === 'error') {
+    return 'error';
+  }
+  if ($check === 'paid') {
+    drop_pay_set_status($payment, 'completed');
+    return 'completed';
+  }
+
+  $gateway = drop_pay_get_gateway($payment->gateway);
+  if (empty($gateway['expire']) || !function_exists($gateway['expire'])) {
+    // Without expiry the checkout link would stay payable, so don't cancel.
+    return 'error';
+  }
+  try {
+    $gateway['expire']($payment);
+  }
+  catch (Exception $e) {
+    watchdog('drop_pay', 'Gateway expire threw: @msg', array('@msg' => $e->getMessage()), WATCHDOG_ERROR);
+    return 'error';
+  }
+
+  drop_pay_set_status($payment, 'cancelled');
+  return 'cancelled';
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Options list callback for the status property (Views, etc.).
+ */
+function _drop_pay_status_options() {
+  return array(
+    'pending'   => t('Pending'),
+    'completed' => t('Completed'),
+    'failed'    => t('Failed'),
+    'refunded'  => t('Refunded'),
+    'cancelled' => t('Cancelled'),
+  );
+}
+

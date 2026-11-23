@@ -1,0 +1,404 @@
+<?php
+/**
+ * @file
+ * Stripe gateway adapter for Drop Pay (hosted Checkout).
+ */
+
+// ---------------------------------------------------------------------------
+// Drop Pay registration
+// ---------------------------------------------------------------------------
+
+/**
+ * Implements hook_drop_pay_gateways().
+ */
+function drop_pay_stripe_drop_pay_gateways() {
+  return array(
+    'stripe' => array(
+      'label'         => t('Stripe (Checkout)'),
+      'description'   => t('Hosted Stripe Checkout — payer is redirected to a Stripe-hosted page.'),
+      'initiate'      => 'drop_pay_stripe_initiate',
+      'confirm'       => 'drop_pay_stripe_confirm',
+      'refund'        => 'drop_pay_stripe_refund',
+      'expire'        => 'drop_pay_stripe_expire',
+      'settings_form' => 'drop_pay_stripe_settings_form',
+    ),
+  );
+}
+
+/**
+ * Implements hook_menu().
+ *
+ * Drop Pay generates the gateway settings menu entry from the gateway
+ * definition, so we only need to register the include file for it here.
+ */
+function drop_pay_stripe_menu() {
+  // No additional menu items — settings_form is auto-routed by drop_pay.
+  return array();
+}
+
+/**
+ * Implements hook_menu_alter().
+ *
+ * Tell the router that the auto-registered settings form lives in our
+ * .admin.inc file.
+ */
+function drop_pay_stripe_menu_alter(&$items) {
+  if (isset($items['drop/pay/settings/gateway/stripe'])) {
+    $items['drop/pay/settings/gateway/stripe']['file'] = 'drop_pay_stripe.admin.inc';
+    $items['drop/pay/settings/gateway/stripe']['file path'] = backdrop_get_path('module', 'drop_pay_stripe');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Initiate — create a Stripe Checkout Session and return its URL
+// ---------------------------------------------------------------------------
+
+/**
+ * Drop Pay initiate callback for the Stripe gateway.
+ *
+ * @param DropPayment $payment
+ *   The pending payment row Drop Pay just created.
+ * @param array $request
+ *   The original request array passed to drop_pay_charge().
+ *
+ * @return array
+ *   array('redirect_url' => string)
+ *
+ * @throws Exception
+ *   On any Stripe API failure.
+ */
+function drop_pay_stripe_initiate(DropPayment $payment, array $request) {
+  _drop_pay_stripe_load_sdk();
+
+  $secret = stripe_get_secret_key();
+  if (empty($secret)) {
+    throw new Exception('Stripe is not configured — no secret key set.');
+  }
+  \Stripe\Stripe::setApiKey($secret);
+
+  $currency = strtolower($payment->currency ?: 'USD');
+  $amount_cents = _drop_pay_stripe_to_smallest_unit((float) $payment->amount, $currency);
+
+  $return_url = drop_pay_payment_url('return', $payment);
+  $cancel_url = drop_pay_payment_url('cancel', $payment);
+
+  // Stash the consumer's return_path / cancel_path on the payment so the
+  // return + cancel pages can redirect after we're done.
+  $metadata = is_array($payment->metadata) ? $payment->metadata : array();
+  if (!empty($request['return_path'])) {
+    $metadata['return_path'] = $request['return_path'];
+  }
+  if (!empty($request['cancel_path'])) {
+    $metadata['cancel_path'] = $request['cancel_path'];
+  }
+
+  $params = array(
+    'mode'                 => 'payment',
+    'payment_method_types' => array('card'),
+    'line_items'           => array(
+      array(
+        'price_data' => array(
+          'currency'     => $currency,
+          'product_data' => array('name' => (string) $payment->description),
+          'unit_amount'  => $amount_cents,
+        ),
+        'quantity' => 1,
+      ),
+    ),
+    'success_url'          => $return_url,
+    'cancel_url'           => $cancel_url,
+    'client_reference_id'  => (string) $payment->pid,
+    'metadata'             => array(
+      'drop_pay_pid'                 => (string) $payment->pid,
+      'drop_pay_purpose'             => (string) $payment->purpose,
+      'drop_pay_purpose_entity_type' => (string) $payment->purpose_entity_type,
+      'drop_pay_purpose_entity_id'   => (string) $payment->purpose_entity_id,
+      'drop_pay_cid'                 => (string) $payment->cid,
+    ),
+  );
+
+  $session = \Stripe\Checkout\Session::create($params);
+
+  // Persist the session ID so confirm() can re-fetch it.
+  $payment->gateway_transaction_id = $session->id;
+  $metadata['stripe_session_id']  = $session->id;
+  $metadata['stripe_session_url'] = $session->url;
+  $payment->metadata = $metadata;
+  $payment->changed  = REQUEST_TIME;
+  $payment->save();
+
+  return array('redirect_url' => $session->url);
+}
+
+// ---------------------------------------------------------------------------
+// Confirm — re-check the session server-side when the user returns
+// ---------------------------------------------------------------------------
+
+/**
+ * Drop Pay confirm callback for the Stripe gateway.
+ *
+ * @return bool
+ *   TRUE if the Checkout session is paid, FALSE otherwise.
+ */
+function drop_pay_stripe_confirm(DropPayment $payment) {
+  if (empty($payment->gateway_transaction_id)) {
+    return FALSE;
+  }
+
+  _drop_pay_stripe_load_sdk();
+  $secret = stripe_get_secret_key();
+  if (empty($secret)) {
+    return FALSE;
+  }
+  \Stripe\Stripe::setApiKey($secret);
+
+  $session = \Stripe\Checkout\Session::retrieve($payment->gateway_transaction_id);
+
+  // Stash the payment_intent so refunds work later.
+  $metadata = is_array($payment->metadata) ? $payment->metadata : array();
+  if (!empty($session->payment_intent)) {
+    $metadata['stripe_payment_intent'] = $session->payment_intent;
+  }
+  $metadata['stripe_payment_status'] = $session->payment_status;
+  $payment->metadata = $metadata;
+  // Save metadata even if the status hasn't changed.
+  $payment->changed = REQUEST_TIME;
+  $payment->save();
+
+  return ($session->payment_status === 'paid');
+}
+
+// ---------------------------------------------------------------------------
+// Expire
+// ---------------------------------------------------------------------------
+
+/**
+ * Drop Pay expire callback for the Stripe gateway.
+ *
+ * Expires an unpaid Checkout session so its link can no longer be paid.
+ * Stripe refuses to expire a session that is already paid; that throws,
+ * and drop_pay_abandon() treats it as an error.
+ *
+ * @return bool
+ *   TRUE once the session is expired.
+ *
+ * @throws Exception
+ *   On any Stripe API failure.
+ */
+function drop_pay_stripe_expire(DropPayment $payment) {
+  if (empty($payment->gateway_transaction_id)) {
+    throw new Exception('No Stripe checkout session to expire.');
+  }
+  _drop_pay_stripe_load_sdk();
+  $secret = stripe_get_secret_key();
+  if (empty($secret)) {
+    throw new Exception('Stripe is not configured, so the checkout cannot be expired.');
+  }
+  \Stripe\Stripe::setApiKey($secret);
+
+  $session = \Stripe\Checkout\Session::retrieve($payment->gateway_transaction_id);
+  if ($session->status !== 'expired') {
+    $session->expire();
+  }
+  return TRUE;
+}
+
+// ---------------------------------------------------------------------------
+// Refund
+// ---------------------------------------------------------------------------
+
+/**
+ * Drop Pay refund callback for the Stripe gateway.
+ *
+ * @param DropPayment $payment
+ *   The completed payment to refund.
+ * @param float|null $amount
+ *   Amount in the payment's currency (main unit, e.g. dollars). NULL refunds
+ *   the full amount.
+ *
+ * @return bool
+ *   TRUE on success.
+ *
+ * @throws Exception
+ */
+function drop_pay_stripe_refund(DropPayment $payment, $amount = NULL) {
+  $metadata = is_array($payment->metadata) ? $payment->metadata : array();
+  $intent = !empty($metadata['stripe_payment_intent']) ? $metadata['stripe_payment_intent'] : NULL;
+  if (!$intent) {
+    throw new Exception('No Stripe payment_intent on file for this payment — cannot refund.');
+  }
+
+  _drop_pay_stripe_load_sdk();
+  $secret = stripe_get_secret_key();
+  if (empty($secret)) {
+    throw new Exception('Stripe is not configured — no secret key set.');
+  }
+  \Stripe\Stripe::setApiKey($secret);
+
+  $params = array('payment_intent' => $intent);
+  if ($amount !== NULL) {
+    $params['amount'] = _drop_pay_stripe_to_smallest_unit((float) $amount, strtolower($payment->currency ?: 'USD'));
+  }
+
+  $refund = \Stripe\Refund::create($params);
+
+  $metadata['stripe_refund_id']     = $refund->id;
+  $metadata['stripe_refund_status'] = $refund->status;
+  $payment->metadata = $metadata;
+  $payment->changed  = REQUEST_TIME;
+  $payment->save();
+
+  return in_array($refund->status, array('succeeded', 'pending'), TRUE);
+}
+
+// ---------------------------------------------------------------------------
+// Webhook
+// ---------------------------------------------------------------------------
+
+/**
+ * Implements hook_stripe_webhook().
+ *
+ * Reacts to checkout.session.completed and charge.refunded events. The payer
+ * may close their browser before reaching /drop/pay/return/{pid}, so the
+ * webhook is how most payments complete.
+ *
+ * The posted event is only a hint about which payment to look at. Its
+ * contents are never trusted: anyone can post to stripe/webhook, and the
+ * contrib Stripe module doesn't verify test-mode events. Each payment is
+ * checked with Stripe's API before anything changes.
+ */
+function drop_pay_stripe_stripe_webhook($type, $data, $event = NULL) {
+  if ($type !== 'checkout.session.completed' && $type !== 'charge.refunded') {
+    return;
+  }
+
+  $obj = isset($data->object) ? $data->object : NULL;
+  if (!$obj) {
+    return;
+  }
+
+  if ($type === 'checkout.session.completed') {
+    $payment = _drop_pay_stripe_webhook_payment($obj);
+    if (!$payment) {
+      watchdog('drop_pay_stripe', 'Webhook checkout.session.completed did not match a pending Stripe payment.', array(), WATCHDOG_WARNING);
+      return;
+    }
+    // Asks Stripe about the session stored on the payment (not the posted
+    // one) and completes the payment only if Stripe says it is paid.
+    drop_pay_refresh($payment);
+    return;
+  }
+
+  // charge.refunded: fetch the charge from Stripe and act only on a full
+  // refund. A partial refund leaves the payment completed.
+  $charge_id = isset($obj->id) ? (string) $obj->id : '';
+  if ($charge_id === '') {
+    return;
+  }
+  try {
+    _drop_pay_stripe_load_sdk();
+    $secret = stripe_get_secret_key();
+    if (empty($secret)) {
+      return;
+    }
+    \Stripe\Stripe::setApiKey($secret);
+    $charge = \Stripe\Charge::retrieve($charge_id);
+  }
+  catch (Exception $e) {
+    watchdog('drop_pay_stripe', 'Webhook charge.refunded: could not retrieve charge @id: @msg', array('@id' => $charge_id, '@msg' => $e->getMessage()), WATCHDOG_ERROR);
+    return;
+  }
+  if (empty($charge->refunded) || empty($charge->payment_intent)) {
+    return;
+  }
+  $intent = is_string($charge->payment_intent) ? $charge->payment_intent : $charge->payment_intent->id;
+
+  // Metadata is stored as a serialized blob; we have to scan.
+  $rows = db_select('drop_payment', 'p')
+    ->fields('p', array('pid', 'metadata'))
+    ->condition('gateway', 'stripe')
+    ->condition('status', 'completed')
+    ->execute();
+  foreach ($rows as $row) {
+    $meta = $row->metadata ? unserialize($row->metadata, array('allowed_classes' => FALSE)) : array();
+    if (!empty($meta['stripe_payment_intent']) && $meta['stripe_payment_intent'] === $intent) {
+      $payment = drop_payment_load($row->pid);
+      if ($payment) {
+        drop_pay_set_status($payment, 'refunded', array('stripe_refund_via' => 'webhook'));
+      }
+      break;
+    }
+  }
+}
+
+/**
+ * Finds the pending Stripe payment a checkout.session.completed event names.
+ *
+ * @param object $obj
+ *   The posted session object (untrusted).
+ *
+ * @return DropPayment|false
+ *   The payment, if it is a pending Stripe payment.
+ */
+function _drop_pay_stripe_webhook_payment($obj) {
+  $payment = FALSE;
+  $pid = isset($obj->client_reference_id) ? (int) $obj->client_reference_id : 0;
+  if (!$pid && !empty($obj->metadata) && isset($obj->metadata->drop_pay_pid)) {
+    $pid = (int) $obj->metadata->drop_pay_pid;
+  }
+  if ($pid) {
+    $payment = drop_payment_load($pid);
+  }
+  if (!$payment && !empty($obj->id)) {
+    $found = db_select('drop_payment', 'p')
+      ->fields('p', array('pid'))
+      ->condition('gateway', 'stripe')
+      ->condition('gateway_transaction_id', (string) $obj->id)
+      ->execute()
+      ->fetchField();
+    $payment = $found ? drop_payment_load($found) : FALSE;
+  }
+  if (!$payment || $payment->gateway !== 'stripe' || $payment->status !== 'pending') {
+    return FALSE;
+  }
+  return $payment;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Loads the Stripe PHP SDK via the contrib stripe module.
+ *
+ * @throws Exception
+ */
+function _drop_pay_stripe_load_sdk() {
+  if (class_exists('\\Stripe\\Stripe')) {
+    return;
+  }
+  if (!function_exists('stripe_load_library')) {
+    throw new Exception('Stripe contrib module is not enabled.');
+  }
+  $library = stripe_load_library();
+  if (empty($library['loaded']) && empty($library['included'])) {
+    throw new Exception('Stripe PHP library could not be loaded.');
+  }
+  if (!class_exists('\\Stripe\\Stripe')) {
+    throw new Exception('Stripe SDK loaded but \\Stripe\\Stripe class not found.');
+  }
+}
+
+/**
+ * Converts a decimal amount to Stripe's smallest currency unit (cents for USD).
+ *
+ * Zero-decimal currencies are passed through unchanged.
+ */
+function _drop_pay_stripe_to_smallest_unit($amount, $currency) {
+  $currency = strtolower($currency);
+  $zero_decimal = array('bif', 'clp', 'djf', 'gnf', 'jpy', 'kmf', 'krw', 'mga', 'pyg', 'rwf', 'ugx', 'vnd', 'vuv', 'xaf', 'xof', 'xpf');
+  if (in_array($currency, $zero_decimal, TRUE)) {
+    return (int) round($amount);
+  }
+  return (int) round($amount * 100);
+}

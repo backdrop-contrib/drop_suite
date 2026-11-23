@@ -1,0 +1,10 @@
+{
+    "_config_name": "drop_pay.settings",
+    "default_gateway": "",
+    "manual_methods": {
+        "cash": "Cash",
+        "check": "Check",
+        "card": "Card in person",
+        "other": "Other"
+    }
+}

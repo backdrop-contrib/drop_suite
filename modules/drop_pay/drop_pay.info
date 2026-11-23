@@ -1,0 +1,9 @@
+name = Drop Pay
+description = Payment gateway abstraction for Drop Suite. Provides a generic drop_payment entity, a gateway plugin interface, and a dispatch API. Gateways are submodules; Drop Pay Stripe is included.
+package = Drop Suite
+version = 1.x-1.0.0
+type = module
+backdrop = 1.x
+
+dependencies[] = entity_plus
+configure = drop/pay/settings

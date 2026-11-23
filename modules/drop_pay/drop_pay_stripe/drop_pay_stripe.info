@@ -1,0 +1,11 @@
+name = Drop Pay — Stripe
+description = Stripe gateway for Drop Pay. Uses Stripe Checkout (hosted) for one-time payments. Depends on the contrib Stripe module for credentials and SDK loading.
+package = Drop Suite
+version = 1.x-1.0.0
+type = module
+backdrop = 1.x
+
+dependencies[] = drop_pay
+dependencies[] = stripe
+
+configure = drop/pay/settings/gateway/stripe

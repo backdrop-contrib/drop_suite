@@ -1,0 +1,8 @@
+name = Drop Pay test gateway
+description = Fake gateway + counters for drop_pay SimpleTest coverage. Not for production.
+package = Drop Suite
+type = module
+backdrop = 1.x
+hidden = TRUE
+
+dependencies[] = drop_pay
