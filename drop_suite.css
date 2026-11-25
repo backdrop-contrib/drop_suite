@@ -984,3 +984,54 @@ ul.action-links li a:focus {
     box-sizing: border-box;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Select2 (searchable selects) — settings come from drop_suite_select2().
+   The closed box follows the layout (with a minimum width); the open list is
+   as wide as its longest item, so names never wrap onto two lines.
+   --------------------------------------------------------------------------- */
+
+.select2-container.drop-select2 {
+  max-width: 100%;
+}
+
+.select2-container.drop-select2--wide {
+  min-width: 18em;
+}
+
+.select2-container.drop-select2--normal {
+  min-width: 12em;
+}
+
+.select2-drop.drop-select2-drop {
+  min-width: 14em;
+  max-width: 36em;
+  font-size: 0.95em;
+}
+
+.drop-select2-drop .select2-results .select2-result-label {
+  padding: 4px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Group headings (e.g. client names above their projects). */
+.drop-select2-drop .select2-results .select2-result-with-children > .select2-result-label {
+  font-weight: 600;
+  color: var(--drop-text-secondary, #555);
+}
+
+/* Striped rows, as in Drop Suite tables. */
+.drop-select2-drop .select2-results .select2-result-selectable:nth-child(even) {
+  background: var(--drop-bg-subtle, #f5f5f5);
+}
+
+.drop-select2-drop .select2-results .select2-result-selectable.select2-highlighted {
+  background: var(--drop-primary, #1565c0);
+  color: #fff;
+}
+
+.drop-select2-drop .select2-results .select2-result-selectable.select2-selected .select2-result-label {
+  font-weight: 600;
+}

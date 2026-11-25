@@ -354,16 +354,34 @@ that says what is wrong, e.g. "Overlaps with 10:30–11:15".
 
 Long or growing lists (projects, people, clients) use the Select2 module's
 searchable dropdown, not the browser's native popup (which can close as soon
-as the mouse button is released on some systems). Add it to a select form
-element with:
+as the mouse button is released on some systems). Add it with the shared
+helper, never with raw settings, so every list looks and behaves the same:
 
 ```php
-'#select2' => array('minimumResultsForSearch' => 0),
+'#select2' => drop_suite_select2('wide'),
 ```
 
+**Two widths, handled separately.** The closed box follows the layout; the open
+list is as wide as its longest item.
+
+- **The box.** `'wide'` (default; at least 18em) for long lists such as
+  projects, `'normal'` (12em) for medium lists, `'narrow'` (no minimum) for
+  filter bars and other tight places, where the box takes the width the layout
+  gives it. Don't force every box to the same width: a filter bar full of
+  selects needs narrow boxes.
+- **The list.** Always opens wide enough for its longest item (up to 36em,
+  longer names are cut with an ellipsis), so names never wrap onto two lines
+  and the list stays short. This applies to every size, including `'narrow'`.
+- **Look.** Rows are striped like Drop Suite tables, text is slightly smaller
+  than the page, group headings (e.g. client names) are bold, the highlighted
+  row uses the primary colour and the current choice is bold. All of this lives
+  in `drop_suite.css`; don't restyle Select2 per module.
+
+**Other rules.**
+
 - Select2 is optional: without it the property is ignored and the native select
-  is used, so don't make a module depend on it for this. When installing Drop
-  Suite, mention it as recommended.
+  is used, so don't make a module depend on it for this. Mention it as
+  recommended when installing Drop Suite.
 - The site setting "use for all select elements" is off in Drop Suite dev
   sites, so only selects that ask for it are enhanced.
 - Grouped options (`<optgroup>`, e.g. projects by client) and the empty option
