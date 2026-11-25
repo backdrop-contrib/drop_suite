@@ -350,6 +350,28 @@ overlapping time entries): an inline icon next to the item it describes,
 coloured with `--drop-warning` (or `--drop-danger` for errors), with a `title`
 that says what is wrong, e.g. "Overlaps with 10:30–11:15".
 
+## Selects
+
+Long or growing lists (projects, people, clients) use the Select2 module's
+searchable dropdown, not the browser's native popup (which can close as soon
+as the mouse button is released on some systems). Add it to a select form
+element with:
+
+```php
+'#select2' => array('minimumResultsForSearch' => 0),
+```
+
+- Select2 is optional: without it the property is ignored and the native select
+  is used, so don't make a module depend on it for this. When installing Drop
+  Suite, mention it as recommended.
+- The site setting "use for all select elements" is off in Drop Suite dev
+  sites, so only selects that ask for it are enhanced.
+- Grouped options (`<optgroup>`, e.g. projects by client) and the empty option
+  (`— Select project —`) work as before; the empty option is the placeholder
+  and clears the field.
+- Short fixed lists (type, priority, status) stay native selects.
+- Selects built in JavaScript (kanban modals) are not enhanced yet.
+
 ## Buttons
 
 Opera (and several other themes) style default and `primary` submit buttons
