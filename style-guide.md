@@ -390,6 +390,22 @@ list is as wide as its longest item.
 - Short fixed lists (type, priority, status) stay native selects.
 - Selects built in JavaScript (kanban modals) are not enhanced yet.
 
+## Project lists
+
+Everywhere a person picks a project, the list is **flat and alphabetical,
+project names only, active projects only**. Don't group by client and don't
+build your own query: call `drop_suite_project_options()` (optionally with a
+user id to limit it to that person's projects), so every form, filter and tool
+in a site lists projects the same way.
+
+- Use the `'wide'` Select2 size for these lists (see *Selects*).
+- Project names should say what they are (e.g. "Beacon Website"), since the
+  client is not shown in the list. Typing part of the name finds it.
+- If you need a different set (for example inactive projects too), add an
+  argument to `drop_suite_project_options()` rather than a new query.
+- This may become a setting later (grouped by client, or client shown after
+  the name). Until then there is one list.
+
 ## Buttons
 
 Opera (and several other themes) style default and `primary` submit buttons
