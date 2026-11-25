@@ -2632,3 +2632,31 @@ function drop_suite_design_tokens_info_alter(array &$info, $theme_name) {
     );
   }
 }
+
+/**
+ * Returns the Select2 settings for a Drop Suite select element.
+ *
+ * Use as the value of '#select2' on a select element. The settings only take
+ * effect when the optional Select2 module is enabled. They give the box and the
+ * list Drop Suite classes (see drop_suite.css): the box follows the page layout
+ * (with a minimum width), while the list is as wide as its longest item so
+ * names do not wrap onto two lines.
+ *
+ * @param string $size
+ *   How wide the closed box should be at least:
+ *   - 'wide': long lists such as projects or clients (default).
+ *   - 'normal': medium lists.
+ *   - 'narrow': no minimum; the box takes the width the layout gives it, for
+ *     filter bars and other tight places. The list still opens wide enough.
+ *
+ * @return array
+ *   Settings for the '#select2' property.
+ */
+function drop_suite_select2($size = 'wide') {
+  return array(
+    // Always show the search box, however few options there are.
+    'minimumResultsForSearch' => 0,
+    'containerCssClass' => 'drop-select2 drop-select2--' . $size,
+    'dropdownCssClass' => 'drop-select2-drop',
+  );
+}
