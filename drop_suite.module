@@ -2537,3 +2537,69 @@ function drop_suite_reactions_attached() {
     'js'  => array($path . '/drop_suite.reactions.js'),
   );
 }
+
+/**
+ * Returns the Drop Suite base colour palette.
+ *
+ * These are the CSS custom properties that Drop Suite modules use for
+ * colours, with their default values. The defaults are also set in the :root
+ * block of drop_suite.css, so Drop Suite works on any theme; keep the two in
+ * sync.
+ *
+ * @return array
+ *   Keyed by custom property name without the leading dashes (for example
+ *   'drop-primary'). Each value is an array with:
+ *   - label: Human-readable name.
+ *   - default: Default CSS colour value.
+ */
+function drop_suite_palette() {
+  return array(
+    'drop-primary'        => array('label' => t('Primary (links, buttons, active items)'), 'default' => '#1565c0'),
+    'drop-primary-dark'   => array('label' => t('Primary, dark (hover)'), 'default' => '#0d47a1'),
+    'drop-text'           => array('label' => t('Text'), 'default' => '#222222'),
+    'drop-text-secondary' => array('label' => t('Secondary text'), 'default' => '#555555'),
+    'drop-text-muted'     => array('label' => t('Muted text'), 'default' => '#888888'),
+    'drop-border'         => array('label' => t('Borders'), 'default' => '#e0e0e0'),
+    'drop-bg-subtle'      => array('label' => t('Subtle background'), 'default' => '#f5f5f5'),
+    'drop-bg-hover'       => array('label' => t('Hover background'), 'default' => '#f0f0f0'),
+    'drop-highlight'      => array('label' => t('Highlight background'), 'default' => '#e3f2fd'),
+    'drop-success'        => array('label' => t('Success'), 'default' => '#2e7d32'),
+    'drop-warning'        => array('label' => t('Warning'), 'default' => '#b26a00'),
+    'drop-danger'         => array('label' => t('Danger'), 'default' => '#c62828'),
+  );
+}
+
+/**
+ * Implements hook_design_tokens_info_alter().
+ *
+ * Adds the Drop Suite palette as a "Drop Suite" group of colour tokens to
+ * every theme that supports Design Tokens (Opera, for example), so Site
+ * Architects can change Drop Suite's colours without custom CSS. Saved values
+ * override the defaults in drop_suite.css. Without Design Tokens this hook
+ * never runs and the drop_suite.css defaults apply.
+ */
+function drop_suite_design_tokens_info_alter(array &$info, $theme_name) {
+  $info['groups']['drop_suite'] = array(
+    'label' => t('Drop Suite'),
+    'description' => t('Colours used by Drop Suite pages: lists, forms, badges and status flags. They do not change the theme itself.'),
+  );
+  foreach (drop_suite_palette() as $name => $token) {
+    // Never replace a token the theme defines itself.
+    if (isset($info['tokens'][$name])) {
+      continue;
+    }
+    $info['tokens'][$name] = array(
+      'label'   => $token['label'],
+      'type'    => 'color',
+      'default' => $token['default'],
+      'group'   => 'drop_suite',
+    );
+  }
+  // Themes that split their tokens into sections get a Drop Suite section.
+  if (!empty($info['sections'])) {
+    $info['sections'][] = array(
+      'label'  => 'Drop Suite',
+      'groups' => array('drop_suite'),
+    );
+  }
+}
