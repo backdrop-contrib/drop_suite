@@ -2595,6 +2595,35 @@ function drop_suite_design_tokens_info_alter(array &$info, $theme_name) {
       'group'   => 'drop_suite',
     );
   }
+  // A scheme only sets the tokens it lists. So that switching schemes never
+  // leaves Drop Suite colours from a previous scheme behind, every existing
+  // scheme also sets the Drop Suite colours (to the defaults, unless the
+  // scheme already sets them).
+  $palette_defaults = array();
+  foreach (drop_suite_palette() as $name => $token) {
+    $palette_defaults[$name] = $token['default'];
+  }
+  if (!empty($info['schemes'])) {
+    foreach ($info['schemes'] as $key => $scheme) {
+      $scheme_tokens = isset($scheme['tokens']) ? $scheme['tokens'] : array();
+      $info['schemes'][$key]['tokens'] = $scheme_tokens + $palette_defaults;
+    }
+  }
+
+  // Opera: add a scheme that keeps Opera's default look and gives Drop Suite
+  // matching maroon colours instead of its default blue. Drop Suite's meaning
+  // colours (priority, overdue, danger) are left alone.
+  if ($theme_name === 'opera' && isset($info['schemes']['default']['tokens'])) {
+    $info['schemes']['drop_suite'] = array(
+      'title'  => t('Opera with Drop Suite'),
+      'tokens' => array(
+        'drop-primary'      => '#6e0e0a',
+        'drop-primary-dark' => '#580b08',
+        'drop-highlight'    => '#f8f3f3',
+      ) + $info['schemes']['default']['tokens'],
+    );
+  }
+
   // Themes that split their tokens into sections get a Drop Suite section.
   if (!empty($info['sections'])) {
     $info['sections'][] = array(

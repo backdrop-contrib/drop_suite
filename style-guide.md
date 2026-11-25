@@ -291,6 +291,18 @@ appears as a "Drop Suite" group on the theme's Design Tokens page (added by
 Drop Suite colours are **not** mapped onto a theme's own tokens: Opera's
 `--color-primary`, for example, is its header background, not an accent colour.
 
+**Opera scheme.** On Opera, Drop Suite adds an "Opera with Drop Suite" scheme
+to the scheme selector: Opera's default look, with Drop Suite's primary and
+highlight colours in matching maroon (`#6e0e0a`, hover `#580b08`, highlight
+`#f8f3f3`). This is the recommended setup. Opera's other schemes reset the
+Drop Suite colours to the blue defaults, so switching schemes never leaves
+mismatched colours behind. Meaning colours (priority, due dates, success,
+warning, danger) are the same in every scheme.
+
+**Hard-coded colours.** Never write a palette colour as a bare hex value
+(`color: #1565c0`); always use the property (`color: var(--drop-primary,
+#1565c0)`), or the page will not follow the scheme.
+
 **Priority colors (5 levels):**
 | Level    | Badge color | Row background |
 |----------|-------------|----------------|
