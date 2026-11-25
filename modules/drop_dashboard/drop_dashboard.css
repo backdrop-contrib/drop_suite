@@ -62,7 +62,7 @@
 
 .dropbridge-section--event    .dropbridge-section-header { background: #2e7d32; }
 .dropbridge-section--goal     .dropbridge-section-header { background: #7b1fa2; }
-.dropbridge-section--task     .dropbridge-section-header { background: #1565c0; }
+.dropbridge-section--task     .dropbridge-section-header { background: var(--drop-primary, #1565c0); }
 .dropbridge-section--activity .dropbridge-section-header { background: #e65100; }
 .dropbridge-section--ticket   .dropbridge-section-header { background: #00838f; }
 

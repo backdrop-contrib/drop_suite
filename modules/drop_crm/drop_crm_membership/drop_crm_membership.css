@@ -43,7 +43,7 @@
 
 .crm-membership-status-pending {
   background-color: #e3f2fd;
-  color: #1565c0;
+  color: var(--drop-primary, #1565c0);
 }
 
 .crm-membership-status-cancelled {

@@ -550,7 +550,7 @@ ul.action-links li a:focus {
   align-items: center;
   gap: 0.25rem;
   padding: 0.3rem 0.85rem;
-  background: #1565c0;
+  background: var(--drop-primary, #1565c0);
   color: #fff !important;
   border-radius: 4px;
   font-size: 0.82rem;
@@ -561,7 +561,7 @@ ul.action-links li a:focus {
 }
 
 .drop-snav__action-btn:hover {
-  background: #0d47a1;
+  background: var(--drop-primary-dark, #0d47a1);
   text-decoration: none !important;
 }
 
@@ -587,14 +587,14 @@ ul.action-links li a:focus {
 }
 
 .drop-snav__item a:hover {
-  color: #1565c0;
+  color: var(--drop-primary, #1565c0);
   border-bottom-color: #90caf9;
   text-decoration: none;
 }
 
 .drop-snav__item.is-active a {
-  color: #1565c0;
-  border-bottom-color: #1565c0;
+  color: var(--drop-primary, #1565c0);
+  border-bottom-color: var(--drop-primary, #1565c0);
   font-weight: 600;
 }
 
@@ -614,8 +614,8 @@ ul.action-links li a:focus {
 }
 
 .drop-snav__item--admin.is-active a {
-  color: #1565c0;
-  border-bottom-color: #1565c0;
+  color: var(--drop-primary, #1565c0);
+  border-bottom-color: var(--drop-primary, #1565c0);
 }
 
 /* Pinned report items — pin icon prefix */
@@ -637,7 +637,7 @@ ul.action-links li a:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: #1565c0;
+  background: var(--drop-primary, #1565c0);
   color: #fff;
   border-radius: 10px;
   min-width: 1.3em;
@@ -651,7 +651,7 @@ ul.action-links li a:focus {
 }
 
 .drop-snav__item.is-active .drop-snav__badge {
-  background: #1565c0;
+  background: var(--drop-primary, #1565c0);
 }
 
 
@@ -709,7 +709,7 @@ ul.action-links li a:focus {
 .drop-settings-card--wizard {
   grid-column: 1 / -1;
   background: #f0f7ff;
-  border-color: #1565c0;
+  border-color: var(--drop-primary, #1565c0);
   border-left-width: 4px;
 }
 
@@ -718,7 +718,7 @@ ul.action-links li a:focus {
 }
 
 .drop-settings-card--wizard h3 a {
-  color: #1565c0;
+  color: var(--drop-primary, #1565c0);
 }
 
 .drop-settings-card--wizard p {
@@ -882,7 +882,7 @@ ul.action-links li a:focus {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  background: #1565c0;
+  background: var(--drop-primary, #1565c0);
   color: #fff;
   padding: 0.65rem 1.25rem;
   font-size: 0.95em;

@@ -14,7 +14,7 @@
   display: inline-block;
   vertical-align: middle;
   margin-left: 0.3em;
-  color: #1565c0;
+  color: var(--drop-primary, #1565c0);
   opacity: 0.7;
 }
 
@@ -92,7 +92,7 @@ tr.crm-activity-planned td {
 
 .crm-hero-orgs a {
   font-weight: 600;
-  color: #1565c0;
+  color: var(--drop-primary, #1565c0);
   text-decoration: none;
 }
 
@@ -112,7 +112,7 @@ a.crm-hero-tag {
   padding: 0.15em 0.6em;
   font-size: 0.8em;
   background: #e3f2fd;
-  color: #1565c0;
+  color: var(--drop-primary, #1565c0);
   border: 1px solid #bbdefb;
   border-radius: 2em;
   text-decoration: none;
@@ -225,7 +225,7 @@ a.crm-hero-tag:hover {
 
 .crm-section-add-group a,
 .crm-section-summary a.drop-section-add {
-  color: #1565c0;
+  color: var(--drop-primary, #1565c0);
   text-decoration: none;
   white-space: nowrap;
 }
@@ -290,7 +290,7 @@ a.crm-method-edit-link {
 }
 
 a.crm-method-edit-link:hover {
-  color: #1565c0;
+  color: var(--drop-primary, #1565c0);
   text-decoration: underline;
 }
 
@@ -374,7 +374,7 @@ a.crm-method-edit-link:hover {
   padding: 0.1em 0.45em;
   font-size: 0.75em;
   border-radius: 3px;
-  background: #1565c0 !important;
+  background: var(--drop-primary, #1565c0) !important;
   color: #fff !important;
   vertical-align: middle;
   text-transform: uppercase;
@@ -487,7 +487,7 @@ a.crm-method-edit-link:hover {
 
 .crm-goal-bar {
   height: 100%;
-  background: #1565c0;
+  background: var(--drop-primary, #1565c0);
   border-radius: 4px;
   transition: width 0.3s ease;
   min-width: 2px;
