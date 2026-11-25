@@ -618,8 +618,8 @@ a.crm-method-edit-link:hover {
   display: inline-block;
   padding: 0.3rem 0.8rem;
   border-radius: 2rem;
-  background: var(--drop-bg-secondary, #f0f0f0);
-  color: var(--drop-text-primary, #333);
+  background: var(--drop-bg-hover, #f0f0f0);
+  color: var(--drop-text, #222);
   text-decoration: none;
   font-size: 0.85em;
   white-space: nowrap;
@@ -646,7 +646,7 @@ a.crm-method-edit-link:hover {
 
 .drop_crm-status-note {
   font-size: 0.9em;
-  color: var(--drop-text-primary, #333);
+  color: var(--drop-text, #222);
   line-height: 1.4;
 }
 
