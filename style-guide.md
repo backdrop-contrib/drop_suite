@@ -13,10 +13,10 @@ not in a dedicated theme.
 - **Module-specific styles** go in each module's own CSS file (e.g.
   `droptickets.css`, `drop_crm.admin.css`) and are loaded via `#attached` only
   on that module's pages.
-- **No Drop Suite theme.** The Dropper theme was an early experiment but added no
-  real value — it was a Basis fork with cosmetic tweaks and no Drop-specific CSS.
-  Drop Suite looks better in established themes like Opera that have solid
-  typography, form styling, and table defaults out of the box.
+- **No Drop Suite theme.** The Dropper theme was an early experiment (March
+  2026, forked from Tatsu) and is no longer used or developed. Drop Suite looks
+  better in established themes that have solid typography, form styling, and
+  table defaults out of the box.
 
 **Where to put new CSS:**
 - If it applies to multiple modules (e.g. a new utility class, a shared
@@ -24,8 +24,20 @@ not in a dedicated theme.
 - If it only applies to one module's pages → that module's CSS file.
 - Never in a theme. Drop Suite should work with any well-built Backdrop theme.
 
-**Future:** Opera + Design Tokens module (replacement for Color module)
-for color customization without a custom theme.
+### Recommended theme: Opera (never required)
+
+- **Opera 2.x with the Design Tokens module is the recommended and tested
+  theme.** Drop Start recommends it during setup, and every Drop Suite dev site
+  runs it.
+- **Drop Suite must not depend on Opera or on Design Tokens.** Every page must
+  work and look reasonable on any well-built Backdrop theme. Never target
+  Opera's class names or its `--color-*` variables in Drop Suite CSS.
+- **When a page looks wrong in Opera**, first decide whether the fix belongs in
+  Drop Suite (our markup or CSS) or in Opera (a general theme bug). Opera fixes
+  go to the Opera repo, not into Drop Suite CSS.
+- **Colours come from Drop Suite's own palette**, not from the theme (see
+  *Use of Color*). With Design Tokens enabled, Site Architects can change the
+  palette on the theme's Design Tokens page, in the "Drop Suite" group.
 
 ## Density and use of space
 
@@ -68,11 +80,11 @@ packed into one tight row per nav item, narrow column widths for the
 checkbox and icon fields, zero margin on form-items, and a short bullet
 list above the table instead of a prose intro. When building a similar
 management UI, open that page first and mirror its density.
-See `modules/drop_suites/drop_suite/drop_suite.nav_admin.inc`.
+See `drop_suite.nav_admin.inc` in this module.
 
 ## Navigation
 
-Four layered surfaces, no breadcrumbs. Order from site-wide to page-specific:
+Four layered surfaces. Order from site-wide to page-specific:
 
 1. **Primary nav** — site-wide sections (Dashboard, CRM, Tickets, Time…).
 2. **Section nav** — sub-items within the current primary section (People, Organizations, To Do…).
@@ -80,6 +92,11 @@ Four layered surfaces, no breadcrumbs. Order from site-wide to page-specific:
 4. **Action Bar** — verbs acting on the current entity (Renew, Record payment, Cancel…). See *Action Bar* section below.
 
 Each surface sits directly below the next broader one in the layout (primary → section → tabs → action bar → page title → content).
+
+**Breadcrumbs are not a navigation surface.** The Drop Suite layout has no
+breadcrumb block. Entity forms and pages still set a breadcrumb with
+`backdrop_set_breadcrumb()` (see *Entity Edit Forms*), so sites that place a
+breadcrumb block, or use another layout, get a sensible trail.
 
 **Primary nav** (`drop-nav` block from drop_suite):
 - Modules register links via `hook_drop_nav_links()` returning `title`, `path`,
@@ -246,16 +263,33 @@ The section nav block (placed in the layout) provides sub-page links automatical
 
 ## Use of Color
 
-All colors defined as CSS custom properties in `drop_suite.css`.
+All colours are CSS custom properties defined in the `:root` block of
+`drop_suite.css`. That file is the single source of truth, so Drop Suite has
+the same colours on every theme.
 
-**Base palette:**
-- `--drop-primary`: #1565c0 (blue)
-- `--drop-border`: #e0e0e0
-- `--drop-text`: #222
-- `--drop-text-secondary`: #555
-- `--drop-bg-subtle`: #f5f5f5
-- `--drop-bg-hover`: #f0f0f0
-- `--drop-success`: #2e7d32 (green, completed states)
+**Base palette** (defaults; also listed in `drop_suite_palette()`, keep the two
+in sync):
+
+| Property | Default | Used for |
+|---|---|---|
+| `--drop-primary` | #1565c0 | Links, primary buttons, active items |
+| `--drop-primary-dark` | #0d47a1 | Hover state of primary |
+| `--drop-text` | #222222 | Body text in Drop Suite components |
+| `--drop-text-secondary` | #555555 | Secondary text, labels |
+| `--drop-text-muted` | #888888 | Meta text, hints, empty states |
+| `--drop-border` | #e0e0e0 | Borders and dividers |
+| `--drop-bg-subtle` | #f5f5f5 | Subtle panels, striped rows |
+| `--drop-bg-hover` | #f0f0f0 | Row and item hover |
+| `--drop-highlight` | #e3f2fd | Selected or highlighted items |
+| `--drop-success` | #2e7d32 | Completed, success states |
+| `--drop-warning` | #b26a00 | Warnings and attention flags |
+| `--drop-danger` | #c62828 | Errors, destructive actions |
+
+**Design Tokens.** When the Design Tokens module is enabled, the palette
+appears as a "Drop Suite" group on the theme's Design Tokens page (added by
+`drop_suite_design_tokens_info_alter()`). Saved values override the defaults.
+Drop Suite colours are **not** mapped onto a theme's own tokens: Opera's
+`--color-primary`, for example, is its header background, not an accent colour.
 
 **Priority colors (5 levels):**
 | Level    | Badge color | Row background |
@@ -266,17 +300,54 @@ All colors defined as CSS custom properties in `drop_suite.css`.
 | Low      | #757575     | #f5f5f5        |
 | None     | #bdbdbd     | #f9f9f9        |
 
-**Due date status:**
+Properties: `--drop-priority-{level}-color`, `-bg`, `-text` (and
+`--drop-priority-critical-row-bg`).
+
+**Due date status:** `--drop-overdue-color` / `-bg`, `--drop-due-soon-color` /
+`-bg`, `--drop-due-today-color` / `-bg`.
 - Overdue: red (#c62828), bg #fff5f5
 - Due soon: orange (#e65100), bg #ffe082
 - Due today: orange (#e65100), bg #fff8e1
 
 **Accent:**
 - Teal left border on settings cards: `border-left: 3px solid #0891b2`
-- Theme link hover: #bd0073 (magenta)
 
-**Rule:** Use the CSS custom properties, not raw hex values, so the theme
-can override them. Only define new properties in `drop_suite.css`.
+**Rules:**
+- Use the custom properties, not raw hex values. Write them with the default
+  as a fallback, e.g. `var(--drop-primary, #1565c0)`, so a module's CSS still
+  works if it loads without `drop_suite.css`. The fallback must match the
+  default in the table above.
+- Only use names that are defined in `drop_suite.css`. Need a new colour? Add
+  it to the `:root` block, to `drop_suite_palette()` and to the table above, in
+  the same change. Don't invent a new name in a module's CSS.
+
+## Icons
+
+Use the Phosphor icons that ship with Backdrop core, through `icon()`:
+
+```php
+icon('warning', array('attributes' => array('width' => '16', 'height' => '16')));
+```
+
+Don't add icon fonts, image icons or other icon sets. Icon-only elements need
+a text alternative: a `title` on the wrapper for the hover hint, plus an
+`element-invisible` span for screen readers.
+
+**Status flags** (a small marker that something needs attention, such as
+overlapping time entries): an inline icon next to the item it describes,
+coloured with `--drop-warning` (or `--drop-danger` for errors), with a `title`
+that says what is wrong, e.g. "Overlaps with 10:30–11:15".
+
+## Buttons
+
+Opera (and several other themes) style default and `primary` submit buttons
+the same, so use classes for visual hierarchy:
+
+- The page-completion submit: default styling, plus `'#button_type' =>
+  'primary'` for semantics.
+- Auxiliary actions (Add row, Recalculate, Reset): add the `button-secondary`
+  class so they recede.
+- Destructive actions: add the `button-danger` class.
 
 ## Entity Edit Forms
 
@@ -384,6 +455,8 @@ Rules:
   Not title case ("Add Ticket").
 
 ### Current status
+
+_Last checked April 2026; it has not been updated since and may be out of date. Check the code before relying on it._
 
 | Form            | Module       | Breadcrumbs | Layout     | Actions #weight | Cancel | CSS attached |
 |-----------------|--------------|-------------|------------|-----------------|--------|--------------|
@@ -519,12 +592,14 @@ function mysubmodule_form_parentmodule_settings_form_alter(&$form, &$form_state)
 
 ### Current status
 
+_Last checked April 2026; it has not been updated since and may be out of date. Check the code before relying on it._
+
 | Module       | Path                      | Follows guide? | Notes                          |
 |--------------|---------------------------|----------------|--------------------------------|
 | drop_suite    | drop/settings/base        | Yes            |                                |
 | drop_crm      | drop/crm/settings         | Yes            |                                |
-| dropbridge   | drop/settings/bridge      | Yes            |                                |
-| dropbridge   | drop/settings/inbound     | Yes            |                                |
+| dropbridge   | drop/settings/bridge      | No             | Module-owned; should be drop/bridge/settings |
+| dropbridge   | drop/settings/inbound     | No             | Module-owned; should be drop/bridge/settings/inbound |
 | dropemail    | drop/email/settings       | Yes            |                                |
 | dropmonitor  | drop/monitor/settings     | Yes            |                                |
 | droptickets  | drop/tickets/settings     | Mostly         | Status link is raw markup      |
@@ -620,6 +695,8 @@ hook_update_NNNN()          → import the view config for existing sites
 ```
 
 ### Current status
+
+_Last checked April 2026; it has not been updated since and may be out of date. Check the code before relying on it._
 
 | Entity          | Module      | Fieldable | Extra fields | Properties | Views listing |
 |-----------------|-------------|-----------|--------------|------------|---------------|
