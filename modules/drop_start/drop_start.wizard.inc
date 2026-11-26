@@ -384,9 +384,11 @@ function drop_start_step_theme($form, &$form_state) {
   $releases_link = l(t('Opera releases page'), 'https://github.com/backdrop-contrib/opera/releases', array(
     'attributes' => array('target' => '_blank', 'rel' => 'noopener'),
   ));
-  // Direct archive link for the manual installer. Update when a newer
-  // 1.x-2.x release ships; drop this once 1.x-2.x is the recommended release.
-  $opera_beta_zip = 'https://github.com/backdrop-contrib/opera/releases/download/1.x-2.0.0-beta004/opera.zip';
+  // Direct archive link for the manual installer. GitHub redirects "latest" to
+  // the newest Opera release, so this needs no version number. Opera 1.x-1.x is
+  // no longer maintained, which means the newest release is always a 1.x-2.x
+  // one. Drop this once 1.x-2.x is the recommended release.
+  $opera_beta_zip = 'https://github.com/backdrop-contrib/opera/releases/latest/download/opera.zip';
   $opera_version = ($opera && !empty($opera->info['version'])) ? $opera->info['version'] : '';
   if ($opera_version && strpos($opera_version, '1.x-1.') === 0) {
     $subform['opera_beta'] = array(
