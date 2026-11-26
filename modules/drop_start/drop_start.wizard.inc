@@ -379,6 +379,29 @@ function drop_start_step_theme($form, &$form_state) {
       . '<p>' . t('Currently active default theme: %current', array('%current' => $current)) . '</p>',
   );
 
+  // Opera's 1.x-2.x beta suits Drop Suite better than 1.x-1.x, but it is not
+  // yet the recommended release, so the project browser installs 1.x-1.x.
+  $releases_link = l(t('Opera releases page'), 'https://github.com/backdrop-contrib/opera/releases', array(
+    'attributes' => array('target' => '_blank', 'rel' => 'noopener'),
+  ));
+  // Direct archive link for the manual installer. GitHub redirects "latest" to
+  // the newest Opera release, so this needs no version number. Opera 1.x-1.x is
+  // no longer maintained, which means the newest release is always a 1.x-2.x
+  // one. Drop this once 1.x-2.x is the recommended release.
+  $opera_beta_zip = 'https://github.com/backdrop-contrib/opera/releases/latest/download/opera.zip';
+  $opera_version = ($opera && !empty($opera->info['version'])) ? $opera->info['version'] : '';
+  if ($opera_version && strpos($opera_version, '1.x-1.') === 0) {
+    $subform['opera_beta'] = array(
+      '#markup' => '<div class="messages warning"><p>'
+        . t('This site has Opera %version. We recommend the newer 1.x-2.x beta, which works better with Drop Suite. Download the latest 1.x-2.x release from the !releases and replace the files in %path. The installer cannot install over an existing theme.', array(
+          '%version' => $opera_version,
+          '!releases' => $releases_link,
+          '%path' => backdrop_get_path('theme', 'opera'),
+        ))
+        . '</p></div>',
+    );
+  }
+
   if ($current === 'opera') {
     // State A: already using Opera.
     $subform['ok'] = array(
@@ -402,14 +425,21 @@ function drop_start_step_theme($form, &$form_state) {
   else {
     // State C: Opera not installed. Provide instructions.
     $subform['missing'] = array(
-      '#markup' => '<p>' . t('The Opera theme is not installed on this site yet. To install it:') . '</p>'
+      '#markup' => '<p>' . t('The Opera theme is not installed on this site yet. We recommend the 1.x-2.x beta release: it works better with Drop Suite than 1.x-1.x, which is what the theme browser on %install currently installs. To install the beta:', array(
+          '%install' => t('Install new themes'),
+        )) . '</p>'
         . '<ol>'
-        . '<li>' . t('Visit the !install_link page on this site.', array(
-          '!install_link' => l(t('Install new themes'), 'admin/appearance/install'),
+        . '<li>' . t('Copy this link to the Opera 1.x-2.x beta archive:') . '<br><code>' . check_plain($opera_beta_zip) . '</code></li>'
+        . '<li>' . t('Paste it into %field on the !manual_link page and click Install.', array(
+          '%field' => t('Install from a URL'),
+          '!manual_link' => l(t('Manual installation'), 'admin/installer/manual'),
         )) . '</li>'
-        . '<li>' . t('Paste the URL or upload the Opera theme archive.') . '</li>'
         . '<li>' . t('Return here and re-open this step to switch to it.') . '</li>'
         . '</ol>'
+        . '<p>' . t('A newer 1.x-2.x release may be listed on the !releases. If you use one, copy the link to its %zip file under Assets, not the link to the release page itself.', array(
+          '!releases' => $releases_link,
+          '%zip' => 'opera.zip',
+        )) . '</p>'
         . '<p>' . t('You can also skip this step and change themes later from %path.', array(
           '%path' => 'admin/appearance',
         )) . '</p>',
