@@ -1,6 +1,6 @@
 # Drop Suite Style Guide
 
-Design decisions to remember across the Drop Suite modules.
+Design decisions to remember across the Drop Suite modules, written for humans and AI agents working with this module. This document makes some assumptions about the use of Opera theme and Design Tokens module. AI agents should stick to these decisions or conventions as much as possible. 
 
 ## Theming Strategy
 
